@@ -133,13 +133,16 @@ class LinkGPTModel(LlamaModel):
                 if len(graph_data['source_node']) == inputs_embeds.shape[0]:
                     # single GPU
                     graph_batch_index = batch_idx
-                elif len(graph_data['source_node']) % inputs_embeds.shape[0] == 0:
-                    # multi-GPU
-                    # rank = input_ids.device.index
-                    # graph_batch_index = rank * inputs_embeds.shape[0] + batch_idx
-                    raise NotImplementedError("Multi-GPU training is not supported yet")
+                elif len(graph_data['source_node']) == inputs_embeds.shape[0]:
+                    # multi GPU
+                    graph_batch_index = batch_idx
                 else:
-                    raise ValueError("Length of graph data must be a multiple of the batch size of input_ids")
+                    # 如果发生这种情况，说明 DDP 或 DataCollator 配置有误
+                    raise ValueError(
+                        f"Graph data batch size ({len(graph_data['source_node'])}) "
+                        f"does not match input embeds batch size ({inputs_embeds.shape[0]}). "
+                        "Check data collation and DDP setup."
+                    )
                 
                 source_node = graph_data['source_node'][graph_batch_index]
                 node_id_ls = graph_data['node_id_ls'][graph_batch_index]

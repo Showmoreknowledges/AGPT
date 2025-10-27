@@ -307,22 +307,37 @@ class AlignmentDataset(Dataset):
     def _prepare_ppr(
         self,
         ppr: Optional[Union[torch.Tensor, "SparseTensor", Dict[Tuple[int, int], float]]],
-    ) -> Optional[Union[torch.Tensor, Dict[Tuple[int, int], float]]]:
+    ) -> Optional[Union[torch.Tensor, "SparseTensor", Dict[Tuple[int, int], float]]]: # <--- 修改返回类型
         if ppr is None:
             return None
         if isinstance(ppr, dict):
+            # 如果已经是字典，直接使用
             return {(int(k[0]), int(k[1])): float(v) for k, v in ppr.items()}
         if isinstance(ppr, torch.Tensor):
             if ppr.is_sparse:
-                coalesced = ppr.coalesce()
-                indices = coalesced.indices().t().tolist()
-                values = coalesced.values().tolist()
-                return {(int(i), int(j)): float(v) for (i, j), v in zip(indices, values)}
-            return ppr.float().cpu()
+                # <--- 不再转换为字典 --->
+                print("⚠️ 警告: PPR 是稀疏张量。保持稀疏格式以节省内存，但查找可能会变慢。")
+                return ppr.coalesce().cpu() # 保持为稀疏张量
+            return ppr.float().cpu() # 保持为密集张量
         if SparseTensor is not None and isinstance(ppr, SparseTensor):
-            row, col, val = ppr.coo()
-            return {(int(i), int(j)): float(v) for i, j, v in zip(row.tolist(), col.tolist(), val.tolist())}
+            # <--- 不再转换为字典 --->
+            print("⚠️ 警告: PPR 是 SparseTensor。保持稀疏格式以节省内存，但查找可能会变慢。")
+            return ppr.cpu() # 保持为 SparseTensor
         raise TypeError(f"Unsupported PPR type: {type(ppr)}")
+
+    def _lookup_ppr(self, u: int, v: int) -> torch.Tensor:
+        if self.ppr_lookup is None:
+            return torch.tensor(0.0, dtype=torch.float32)
+        if isinstance(self.ppr_lookup, torch.Tensor):
+            # 适用于密集张量，或（低效的）稀疏张量查找
+            return self.ppr_lookup[u, v].view(1).float() 
+        if SparseTensor is not None and isinstance(self.ppr_lookup, SparseTensor):
+            # <--- 处理 SparseTensor (低效) --->
+            # 注意：这是低效的逐元素查找
+            return self.ppr_lookup[u, v].view(1).float()
+        
+        # 适用于字典
+        return torch.tensor(self.ppr_lookup.get((u, v), 0.0), dtype=torch.float32).view(1)
 
     def _infer_target_candidates(self, pairs: torch.Tensor) -> Sequence[int]:
         target_ids = torch.unique(pairs[:, 1]).cpu().tolist()
@@ -347,55 +362,3 @@ class AlignmentDataset(Dataset):
             neg_tgt = self.rng.choice(self.target_candidates)
         return neg_tgt
 
-    def _lookup_ppr(self, u: int, v: int) -> torch.Tensor:
-        if self.ppr_lookup is None:
-            return torch.tensor(0.0, dtype=torch.float32)
-        if isinstance(self.ppr_lookup, torch.Tensor):
-            return self.ppr_lookup[u, v].view(1).float()
-        return torch.tensor(self.ppr_lookup.get((u, v), 0.0), dtype=torch.float32).view(1)
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--data_path", type=str, required=True, help="多层网络数据的 .npz 文件路径")
-    parser.add_argument("--output_dir", type=str, default="/root/autodl-tmp/prepared_data", help="输出目录")
-    args = parser.parse_args()
-
-    os.makedirs(args.output_dir, exist_ok=True)
-    dataset = MultiLayerGraphDataset(args.data_path)
-
-    merged_edge_index, merged_x, mapping_g2_to_merged, n1, n2, n_total = merge_graphs(
-        dataset.edge_index1, dataset.edge_index2, dataset.x1, dataset.x2
-    )
-    gnid2text, merged_features = process_node_features_for_cgtp(
-        dataset.x1, dataset.x2, n1, n2, mapping_g2_to_merged
-    )
-    train_pairs_merged, test_pairs_merged = process_alignment_pairs(dataset.pos_pairs, dataset.test_pairs, n1)
-    tag_dataset = TAGDatasetForLM(merged_edge_index, gnid2text, merged_features)
-
-    # === 方案2: 清理 features 再保存对象 ===
-    output_dir = args.output_dir
-
-    # 1️⃣ 保存基础数据
-    torch.save(merged_edge_index, os.path.join(output_dir, "merged_edge_index.pt"))
-    torch.save(train_pairs_merged, os.path.join(output_dir, "train_pairs_merged.pt"))
-    torch.save(test_pairs_merged, os.path.join(output_dir, "test_pairs_merged.pt"))
-
-    # 2️⃣ 保存大矩阵独立文件
-    if merged_features is not None and merged_features.numel() > 0:
-        torch.save(merged_features, os.path.join(output_dir, "merged_features.pt"))
-        print(f"✅ merged_features 已单独保存 ({merged_features.shape})")
-
-    # 3️⃣ 清空特征再保存 dataset 对象
-    tag_dataset.features = None
-    with open(os.path.join(output_dir, "dataset_for_lm.pkl"), "wb") as f:
-        pickle.dump(tag_dataset, f)
-    print(f"✅ dataset_for_lm.pkl 保存完成（不含特征矩阵）")
-
-    # 4️⃣ 其他可选保存
-    if gnid2text is not None:
-        with open(os.path.join(output_dir, "gnid2text.json"), "w", encoding="utf-8") as f:
-            json.dump(gnid2text, f, ensure_ascii=False, indent=2)
-
-    print(f"\n🎯 所有数据已保存到: {os.path.abspath(args.output_dir)}")
-    print("数据准备完毕，可直接进入 CGTP 预训练阶段。")
