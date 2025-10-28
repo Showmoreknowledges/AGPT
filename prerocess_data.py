@@ -13,9 +13,6 @@ from dataset import (
     TAGDatasetForLM
 )
 
-# <--- 此处开始 --->
-# 从 dataset.py 剪切过来的 __main__ 逻辑
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_path", type=str, required=True, help="多层网络数据的 .npz 文件路径")
@@ -48,10 +45,20 @@ if __name__ == "__main__":
         print(f"✅ merged_features 已单独保存 ({merged_features.shape})")
 
     # 3️⃣ 清空特征再保存 dataset 对象
+    # LinkGPT 的 YNDataset 会从 'edge_split' 属性中读取链接预测任务。
+    # 我们将合并后的“对齐锚点对”注入此处。
+    # YNDataset 会自动使用 'edge' 作为正样本，并为其生成负样本。
+    print("✅ 正在将合并后的对齐链接注入 'dataset_for_lm.edge_split'...")
+    tag_dataset.edge_split = {
+        'train': {'edge': train_pairs_merged.numpy()},
+        'valid': {'edge': test_pairs_merged.numpy()}, # 我们使用 'valid' 作为验证/测试集
+        'test': {'edge': test_pairs_merged.numpy()}
+    
+    
     tag_dataset.features = None
     with open(os.path.join(output_dir, "dataset_for_lm.pkl"), "wb") as f:
         pickle.dump(tag_dataset, f)
-    print(f"✅ dataset_for_lm.pkl 保存完成（不含特征矩阵）")
+    print(f"✅ dataset_for_lm.pkl 保存完成（已注入对齐链接）") 
 
     # 4️⃣ 其他可选保存
     if gnid2text is not None:
