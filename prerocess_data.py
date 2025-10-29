@@ -53,7 +53,7 @@ if __name__ == "__main__":
         'train': {'edge': train_pairs_merged.numpy()},
         'valid': {'edge': test_pairs_merged.numpy()}, # 我们使用 'valid' 作为验证/测试集
         'test': {'edge': test_pairs_merged.numpy()}
-    
+    }
     
     tag_dataset.features = None
     with open(os.path.join(output_dir, "dataset_for_lm.pkl"), "wb") as f:
