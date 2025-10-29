@@ -145,41 +145,6 @@ def process_alignment_pairs(pos_pairs, test_pairs, num_nodes_1):
     return train_pairs_merged, test_pairs_merged
 
 
-class TAGDatasetForLM(Dataset):
-    def __init__(self, merged_edge_index, gnid2text=None, merged_features=None):
-        super().__init__()
-        self.edge_index = merged_edge_index
-        self.gnid2text = gnid2text
-        self.features = merged_features
-        self.num_nodes = (
-            merged_features.shape[0] if merged_features is not None else len(gnid2text)
-        )
-        self.data_list = []
-        for i in range(self.num_nodes):
-            node_info = {"node_id": i, "neighbors": self._get_neighbors(i)}
-            if self.gnid2text is not None:
-                node_info["text"] = self.gnid2text.get(i, "")
-            if self.features is not None:
-                node_info["feature"] = self.features[i]
-            self.data_list.append(node_info)
-        print(f"✅ TAGDatasetForLM: 共 {self.num_nodes} 个节点样本")
-
-    def __len__(self):
-        return self.num_nodes
-
-    def __getitem__(self, idx):
-        return self.data_list[idx]
-
-    def _get_neighbors(self, idx):
-        src_mask = self.edge_index[0] == idx
-        dst_mask = self.edge_index[1] == idx
-        neighbors = torch.cat([self.edge_index[1][src_mask], self.edge_index[0][dst_mask]]).unique().tolist()
-        return neighbors
-
-    def get_neighbors_in_training_set(self, gnid):
-        return self._get_neighbors(gnid)
-
-
 class AlignmentDataset(Dataset):
     """
     网络对齐数据集。

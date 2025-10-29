@@ -10,7 +10,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from transformers import Trainer, TrainerCallback, TrainingArguments
 
-from dataset import AlignmentDataset
+from Mul_dataset import AlignmentDataset
 
 
 class AlignmentScoringModel(nn.Module):

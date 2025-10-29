@@ -4,22 +4,23 @@ import pickle
 import json
 import torch
 
+from dataset import TAGDatasetForLM
 # 导入 dataset.py 中定义的类和函数
-from dataset import (
+from Mul_dataset import (
     MultiLayerGraphDataset,
     merge_graphs,
     process_node_features_for_cgtp,
     process_alignment_pairs,
-    TAGDatasetForLM
 )
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("--data", type=str, required=True, help="多层网络数据")
     parser.add_argument("--data_path", type=str, required=True, help="多层网络数据的 .npz 文件路径")
     parser.add_argument("--output_dir", type=str, default="/root/autodl-tmp/prepared_data", help="输出目录")
     args = parser.parse_args()
 
-    os.makedirs(args.output_dir, exist_ok=True)
+    os.makedirs(f"{args.output_dir}/{args.data}", exist_ok=True)
     dataset = MultiLayerGraphDataset(args.data_path)
 
     merged_edge_index, merged_x, mapping_g2_to_merged, n1, n2, n_total = merge_graphs(
@@ -31,8 +32,8 @@ if __name__ == "__main__":
     train_pairs_merged, test_pairs_merged = process_alignment_pairs(dataset.pos_pairs, dataset.test_pairs, n1)
     tag_dataset = TAGDatasetForLM(merged_edge_index, gnid2text, merged_features)
 
-    # === 方案2: 清理 features 再保存对象 ===
-    output_dir = args.output_dir
+    # === 清理 features 再保存对象 ===
+    output_dir = f"{args.output_dir}/{args.data}"
 
     # 1️⃣ 保存基础数据
     torch.save(merged_edge_index, os.path.join(output_dir, "merged_edge_index.pt"))
@@ -52,7 +53,7 @@ if __name__ == "__main__":
     tag_dataset.edge_split = {
         'train': {'edge': train_pairs_merged.numpy()},
         'valid': {'edge': test_pairs_merged.numpy()}, # 我们使用 'valid' 作为验证/测试集
-        'test': {'edge': test_pairs_merged.numpy()}
+        'test': {'edge': test_pairs_merged.numpy()},
     }
     
     tag_dataset.features = None

@@ -21,7 +21,7 @@ if project_path not in sys.path:
 from linkgpt.text_graph_pretraining.graph_text_dataset import CGTPDataset
 from linkgpt.text_graph_pretraining.graph_text_model import CGTPModel
 from linkgpt.utils import basics
-from dataset import TAGDatasetForLM
+from Mul_dataset import TAGDatasetForLM
 
 
 def train_epoch(model, train_loader, optimizer, lr_scheduler, step, device):
