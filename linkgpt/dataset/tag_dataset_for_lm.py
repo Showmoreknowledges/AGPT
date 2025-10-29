@@ -120,15 +120,79 @@ class TAGDatasetForLM():
 
 def tag_dataset_for_lm_to_dgl_graph(dataset_for_lm: TAGDatasetForLM, device: str='cpu', include_valid: bool=True):
     """
-    Convert a TAGDatasetForLM object to a DGL graph object.
+    Convert a :class:`TAGDatasetForLM` object to a DGL graph.
+
+    The original implementation always produced a homogeneous graph. For
+    multi-relational data we optionally build a heterograph with one edge type
+    per relation. The relation identifiers are expected to be provided in the
+    ``edge_split`` dictionaries via the ``relation_type`` (or ``edge_type``)
+    field. When the field is absent we fall back to the homogeneous behaviour
+    to preserve backward compatibility.
     """
+
+    def _cat(values: List[torch.Tensor]) -> torch.Tensor:
+        return torch.cat(values, dim=0) if len(values) > 1 else values[0]
+    
     num_nodes = len(dataset_for_lm)
     edge_split = dataset_for_lm.edge_split
-    if include_valid:
-        src_ls = torch.tensor(edge_split['train']['source_node'] + edge_split['valid']['source_node'])
-        dst_ls = torch.tensor(edge_split['train']['target_node'] + edge_split['valid']['target_node'])
-    else:
-        src_ls = torch.tensor(edge_split['train']['source_node'])
-        dst_ls = torch.tensor(edge_split['train']['target_node'])
-    g = dgl.graph((src_ls, dst_ls), num_nodes=num_nodes).to(device)
-    return g
+    
+    train_src = torch.tensor(edge_split['train']['source_node'], dtype=torch.long)
+    train_dst = torch.tensor(edge_split['train']['target_node'], dtype=torch.long)
+    src_tensors = [train_src]
+    dst_tensors = [train_dst]
+
+    relation_field = None
+    for candidate in ('relation_type', 'relation_types', 'edge_type'):
+        if candidate in edge_split['train']:
+            relation_field = candidate
+            break
+
+    relation_tensors: List[torch.Tensor] = []
+    if relation_field is not None:
+        relation_tensors.append(torch.tensor(edge_split['train'][relation_field], dtype=torch.long))
+
+    if include_valid and 'valid' in edge_split:
+        valid_src = torch.tensor(edge_split['valid']['source_node'], dtype=torch.long)
+        valid_dst = torch.tensor(edge_split['valid']['target_node'], dtype=torch.long)
+        src_tensors.append(valid_src)
+        dst_tensors.append(valid_dst)
+        if relation_field is not None and relation_field in edge_split['valid']:
+            relation_tensors.append(torch.tensor(edge_split['valid'][relation_field], dtype=torch.long))
+
+    src_all = _cat(src_tensors)
+    dst_all = _cat(dst_tensors)
+
+    if relation_field is None or len(relation_tensors) == 0:
+        g = dgl.graph((src_all, dst_all), num_nodes=num_nodes).to(device)
+        g._linkgpt_is_hetero = False  # type: ignore[attr-defined]
+        return g
+
+    relation_all = _cat(relation_tensors)
+    if relation_all.numel() != src_all.numel():
+        raise ValueError(
+            "Relation type list must have the same length as the edge list. "
+            f"Got {relation_all.numel()} relation labels for {src_all.numel()} edges."
+        )
+
+    hetero_edges = {}
+    unique_rel_ids = torch.unique(relation_all).tolist()
+    for rel_id in unique_rel_ids:
+        mask = relation_all == rel_id
+        rel_name = f'rel_{int(rel_id)}'
+        hetero_edges[('node', rel_name, 'node')] = (
+            src_all[mask],
+            dst_all[mask],
+        )
+
+    hetero_graph = dgl.heterograph(hetero_edges, num_nodes_dict={'node': num_nodes})
+    for rel_id in unique_rel_ids:
+        rel_name = f'rel_{int(rel_id)}'
+        num_edges = hetero_graph.num_edges(rel_name)
+        hetero_graph.edges[('node', rel_name, 'node')].data['relation_type'] = (
+            torch.full((num_edges,), int(rel_id), dtype=torch.long)
+        )
+
+    hetero_graph = hetero_graph.to(device)
+    hetero_graph._linkgpt_is_hetero = True  # type: ignore[attr-defined]
+    hetero_graph._linkgpt_primary_ntype = 'node'  # type: ignore[attr-defined]
+    return hetero_graph

@@ -37,6 +37,9 @@ def get_lpformer_model(
     ablate_att=False,
     ablate_pe=False,
     ablate_feats=False,
+    use_relational_gnn=False,
+    num_relation_types=1,
+    relation_agg='sum',
 ):
     model_args = {
         'dim': dim,
@@ -67,6 +70,9 @@ def get_lpformer_model(
         'ablate_att': ablate_att,
         'ablate_pe': ablate_pe,
         'ablate_feats': ablate_feats,
+        'use_relational_gnn': use_relational_gnn,
+        'num_relation_types': num_relation_types,
+        'relation_agg': relation_agg,
     }
 
     model = LinkTransformer(model_args, data, device=device).to(device)

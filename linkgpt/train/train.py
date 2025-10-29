@@ -158,12 +158,29 @@ def main():
         num_node_types = max(num_node_types, getattr(np_dataset, 'num_node_types', 1))
 
     dgl_graph = tag_dataset_for_lm_to_dgl_graph(dataset_for_lm, include_valid=True).to(device)
-    dgl_graph.ndata['feat'] = text_emb_list[0]
+    homo_attr = getattr(dgl_graph, "is_homogeneous", None)
+    if homo_attr is None:
+        is_homo_graph = True
+    else:
+        is_homo_graph = bool(homo_attr() if callable(homo_attr) else homo_attr)
+    if not is_homo_graph:
+        primary_ntype = getattr(dgl_graph, "_linkgpt_primary_ntype", dgl_graph.ntypes[0])
+        dgl_graph.nodes[primary_ntype].data['feat'] = text_emb_list[0]
+    else:
+        dgl_graph.ndata['feat'] = text_emb_list[0]
 
     # Load pairwise encoder
     lpformer_dataset = get_lpformer_dataset(args.dataset_name, dataset_for_lm.edge_split, dgl_graph, ppr_data, device)
-    lpformer_model = get_lpformer_model(lpformer_dataset, device).to(device) # randomly initialized, not pre-trained
-    
+    use_relational_gnn = lpformer_dataset.get('use_relational_gnn', False)
+    if not use_relational_gnn:
+        use_relational_gnn = num_relation_types > 1
+    lpformer_model = get_lpformer_model(
+        lpformer_dataset,
+        device,
+        use_relational_gnn=use_relational_gnn,
+        num_relation_types=num_relation_types,
+    ).to(device) # randomly initialized, not pre-trained
+
     # Load model and tokenizer
     hf_parser = HfArgumentParser(llm_tuner_parser._TRAIN_ARGS)
     hf_args_dict = {
