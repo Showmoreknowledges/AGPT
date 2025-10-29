@@ -27,6 +27,38 @@ def main():
     print(f"正在加载: {dataset_for_lm_path}")
     dataset_for_lm = basics.load_pickle(dataset_for_lm_path)
 
+    # 兼容不同版本的 edge_split 字段命名
+    def ensure_field(entry, target_key, candidates, required=True):
+        if target_key in entry:
+            return
+        for cand in candidates:
+            if cand in entry:
+                entry[target_key] = entry[cand]
+                return
+        if required:
+            raise KeyError(
+                f"edge_split 字段缺少 '{target_key}'，可接受的备选名称包括: {candidates}"
+            )
+
+    edge_split = getattr(dataset_for_lm, 'edge_split', None)
+    if edge_split is None:
+        raise ValueError('dataset_for_lm 缺少 edge_split，请确认预处理阶段已调用 generate_edge_split。')
+
+    split_names = ['train', 'valid', 'test']
+    for split in split_names:
+        if split not in edge_split:
+            continue
+        entry = edge_split[split]
+        ensure_field(entry, 'source_node', ['source_nodes', 'src', 'src_nodes', 'source', 'sources'])
+        ensure_field(entry, 'target_node', ['target_nodes', 'dst', 'dst_nodes', 'target', 'targets'])
+        # 负样本只在 valid/test 中需要
+        ensure_field(
+            entry,
+            'target_node_neg',
+            ['target_nodes_neg', 'neg_target_node', 'target_neg', 'negative_target_node', 'neg_targets', 'negative_targets'],
+            required=(split != 'train'),
+        )
+
     dgl_graph = tag_dataset_for_lm_to_dgl_graph(dataset_for_lm, device='cpu', include_valid=True)
     gnid2text = getattr(dataset_for_lm, 'gnid2text', None)
 
