@@ -158,7 +158,7 @@ def main():
     parser.add_argument("--alpha", help="Teleportation probability", type=float, default=0.15)
 
     args = parser.parse_args()
-    
+
     dataset_for_lm = basics.load_pickle(args.dataset_for_lm_path)
     g = tag_dataset_for_lm_to_dgl_graph(dataset_for_lm)
     src_node_ls, tgt_node_ls = g.edges()
