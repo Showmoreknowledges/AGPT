@@ -146,6 +146,8 @@ def main():
     lp_dataset.config.learn_text = args.lp_learn_text
     lp_dataset.config.learn_all = args.lp_learn_all
     lp_dataset.config.node_encoding_max_hop = args.max_hop
+    num_node_types = getattr(lp_dataset, 'num_node_types', 1)
+    num_relation_types = getattr(lp_dataset, 'num_relation_types', 1)
     
     if args.np_dataset_path is not None:
         np_dataset = basics.load_pickle(args.np_dataset_path)
@@ -153,6 +155,7 @@ def main():
         np_dataset.config.np_learn_all = args.np_learn_all
         np_dataset.config.learn_src_text = args.np_learn_src_text
         np_dataset.config.node_encoding_max_hop = args.max_hop
+        num_node_types = max(num_node_types, getattr(np_dataset, 'num_node_types', 1))
 
     dgl_graph = tag_dataset_for_lm_to_dgl_graph(dataset_for_lm, include_valid=True).to(device)
     dgl_graph.ndata['feat'] = text_emb_list[0]
@@ -200,7 +203,9 @@ def main():
         is_trainable=True,
         device=device,
         apply_lora=True,
-        node_proj_num_layers=args.node_proj_num_layers
+        node_proj_num_layers=args.node_proj_num_layers,
+        num_node_types=num_node_types,
+        num_relation_types=num_relation_types,
     )
     linkgpt_data_collator = LinkGPTDataCollator(tokenizer)
     

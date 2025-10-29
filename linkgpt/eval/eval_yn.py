@@ -252,11 +252,24 @@ def eval_one(candidate_list: List[Tuple[str, Dict]], model, tokenizer, device, b
     
     num_node_tokens = (shared_prefix_ids == tokenizer.convert_tokens_to_ids(NODE_TOKEN)).sum().item()
     num_pairwise_tokens = (shared_prefix_ids == tokenizer.convert_tokens_to_ids(PAIRWISE_TOKEN)).sum().item()
+    def _prefix_slice(lst, prefix_len):
+        if lst is None:
+            return []
+        return lst[:min(prefix_len, len(lst))]
+    
     shared_graph_data = {
         'source_node': [graph_data_list[0]['source_node']],
         'node_id_ls': [graph_data_list[0]['node_id_ls'][:num_node_tokens]],
         'pairwise_target_id_ls': [graph_data_list[0]['pairwise_target_id_ls'][:num_pairwise_tokens]],
     }
+
+    if 'node_type_ls' in graph_data_list[0]:
+        shared_graph_data['node_type_ls'] = [_prefix_slice(graph_data_list[0]['node_type_ls'], num_node_tokens)]
+    if 'pairwise_target_type_ls' in graph_data_list[0]:
+        shared_graph_data['pairwise_target_type_ls'] = [_prefix_slice(graph_data_list[0]['pairwise_target_type_ls'], num_pairwise_tokens)]
+    if 'pairwise_relation_type_ls' in graph_data_list[0]:
+        shared_graph_data['pairwise_relation_type_ls'] = [_prefix_slice(graph_data_list[0]['pairwise_relation_type_ls'], num_pairwise_tokens)]
+    
     with torch.no_grad():
         output = model(input_ids=shared_prefix_ids, graph_data=shared_graph_data)
         shared_past_key_values = output.past_key_values
@@ -282,7 +295,13 @@ def eval_one(candidate_list: List[Tuple[str, Dict]], model, tokenizer, device, b
             'node_id_ls': [gd['node_id_ls'][num_node_tokens:] for gd in batch_graph_data],
             'pairwise_target_id_ls': [gd['pairwise_target_id_ls'][num_pairwise_tokens:] for gd in batch_graph_data],
         }
-        
+        if 'node_type_ls' in batch_graph_data[0]:
+            batch_suffix_graph_data['node_type_ls'] = [gd['node_type_ls'][num_node_tokens:] for gd in batch_graph_data]
+        if 'pairwise_target_type_ls' in batch_graph_data[0]:
+            batch_suffix_graph_data['pairwise_target_type_ls'] = [gd['pairwise_target_type_ls'][num_pairwise_tokens:] for gd in batch_graph_data]
+        if 'pairwise_relation_type_ls' in batch_graph_data[0]:
+            batch_suffix_graph_data['pairwise_relation_type_ls'] = [gd['pairwise_relation_type_ls'][num_pairwise_tokens:] for gd in batch_graph_data]
+            
         with torch.no_grad():
             batch_output = model(**suffix_encoded_input, graph_data=batch_suffix_graph_data, past_key_values=batch_shared_past_key_values)
             del batch_shared_past_key_values

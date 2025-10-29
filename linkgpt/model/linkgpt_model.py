@@ -29,6 +29,11 @@ from ..utils import basics
 class LinkGPTConfig(LlamaConfig):
     model_type = "LinkGPT"
 
+    def __init__(self, num_node_types: int = 1, num_relation_types: int = 1, **kwargs):
+        super().__init__(**kwargs)
+        self.num_node_types = max(1, int(num_node_types))
+        self.num_relation_types = max(1, int(num_relation_types))
+
 # adapted from GraphGPT
 class LinkGPTModel(LlamaModel):
     config_class = LinkGPTConfig
@@ -47,6 +52,15 @@ class LinkGPTModel(LlamaModel):
         self.linkgpt_special_token_id_ls = None
         self.linkgpt_special_token_id_to_idx = None
         self.linkgpt_special_token_emb = None
+
+        self.node_type_embeddings = None
+        self.relation_type_embeddings = None
+        self.num_node_types = 1
+        self.num_relation_types = 1
+        self.set_type_embeddings(
+            getattr(config, 'num_node_types', 1),
+            getattr(config, 'num_relation_types', 1)
+        )
         
     def set_node_encoder(self, node_encoding_list: List[torch.Tensor], num_layers=1):
         self.node_encoding_max_hop = len(node_encoding_list) - 1
@@ -84,6 +98,25 @@ class LinkGPTModel(LlamaModel):
         self.linkgpt_special_token_id_ls = linkgpt_special_token_id_ls
         self.linkgpt_special_token_to_id = {token: idx for token, idx in zip(linkgpt_special_token_ls, linkgpt_special_token_id_ls)}
     
+    def set_type_embeddings(self, num_node_types: int = 1, num_relation_types: int = 1):
+        num_node_types = max(1, int(num_node_types))
+        num_relation_types = max(1, int(num_relation_types))
+
+        if self.node_type_embeddings is None or self.node_type_embeddings.num_embeddings != num_node_types:
+            self.node_type_embeddings = nn.Embedding(num_node_types, self.config.hidden_size)
+            self._init_weights(self.node_type_embeddings)
+        if self.relation_type_embeddings is None or self.relation_type_embeddings.num_embeddings != num_relation_types:
+            self.relation_type_embeddings = nn.Embedding(num_relation_types, self.config.hidden_size)
+            self._init_weights(self.relation_type_embeddings)
+
+        self.node_type_embeddings = self.node_type_embeddings.to(self.device)
+        self.relation_type_embeddings = self.relation_type_embeddings.to(self.device)
+
+        self.num_node_types = num_node_types
+        self.num_relation_types = num_relation_types
+        self.config.num_node_types = num_node_types
+        self.config.num_relation_types = num_relation_types
+
     def is_valid(self):
         """
         Ensure set_node_encoder, set_pairwise_encoder, and set_pairwise_encoder are called before calling `forward()`
@@ -148,6 +181,21 @@ class LinkGPTModel(LlamaModel):
                 node_id_ls = graph_data['node_id_ls'][graph_batch_index]
                 pairwise_target_id_ls = graph_data['pairwise_target_id_ls'][graph_batch_index]
                 
+                node_type_ls = None
+                if 'node_type_ls' in graph_data:
+                    node_type_entries = graph_data['node_type_ls'][graph_batch_index]
+                    if isinstance(node_type_entries, torch.Tensor):
+                        node_type_ls = node_type_entries.tolist()
+                    else:
+                        node_type_ls = list(node_type_entries)
+                pairwise_relation_type_ls = None
+                if 'pairwise_relation_type_ls' in graph_data:
+                    relation_type_entries = graph_data['pairwise_relation_type_ls'][graph_batch_index]
+                    if isinstance(relation_type_entries, torch.Tensor):
+                        pairwise_relation_type_ls = relation_type_entries.tolist()
+                    else:
+                        pairwise_relation_type_ls = list(relation_type_entries)
+
                 if len(node_id_ls) > 0:
                     node_encoding_list = []
                     for node_id, hop_num in node_id_ls:
@@ -155,6 +203,11 @@ class LinkGPTModel(LlamaModel):
                         node_encoding_list.append(node_encoding)
                     node_encodings = torch.stack(node_encoding_list, dim=0).to(self.device)
                     node_encodings = self.node_alignment_proj(node_encodings)
+                    if node_type_ls is not None and len(node_type_ls) == len(node_id_ls):
+                        node_type_tensor = torch.tensor(node_type_ls, dtype=torch.long, device=self.device)
+                        node_type_tensor = torch.clamp(node_type_tensor, max=self.num_node_types - 1)
+                        node_type_emb = self.node_type_embeddings(node_type_tensor)
+                        node_encodings = node_encodings + node_type_emb
                 else:
                     # no <node> token
                     node_encodings = None
@@ -166,6 +219,11 @@ class LinkGPTModel(LlamaModel):
                         torch.tensor([[source_node, tgt] for tgt in pairwise_target_id_ls]).t()
                     ).to(self.device)
                     pairwise_encodings = self.pairwise_alignment_proj(pairwise_encodings)
+                    if pairwise_relation_type_ls is not None and len(pairwise_relation_type_ls) == pairwise_encodings.shape[0]:
+                        relation_type_tensor = torch.tensor(pairwise_relation_type_ls, dtype=torch.long, device=self.device)
+                        relation_type_tensor = torch.clamp(relation_type_tensor, max=self.num_relation_types - 1)
+                        relation_emb = self.relation_type_embeddings(relation_type_tensor)
+                        pairwise_encodings = pairwise_encodings + relation_emb
                 else:
                     # no <pairwise> token
                     pairwise_encodings = None
@@ -365,7 +423,9 @@ def get_model_and_tokenizer(
     add_valuehead=False,
     device='cpu',
     apply_lora=True,
-    node_proj_num_layers=1
+    node_proj_num_layers=1,
+    num_node_types: int = 1,
+    num_relation_types: int = 1,
 ):
     """
     Create pre-trained model and tokenizer for fine-tuning
@@ -380,6 +440,8 @@ def get_model_and_tokenizer(
     }
     special_token_id_ls = [tokenizer.vocab[token] for token in LINKGPT_SPECIAL_TOKENS]
     config = AutoConfig.from_pretrained(model_args.model_name_or_path, **config_kwargs)
+    config.num_node_types = max(1, int(num_node_types))
+    config.num_relation_types = max(1, int(num_relation_types))
     patch_config(config, tokenizer, model_args, config_kwargs, is_trainable, add_valuehead=False)
     
     config_kwargs.pop("config", None)
@@ -408,6 +470,7 @@ def get_model_and_tokenizer(
     model.model.set_node_encoder(node_encoding_list, num_layers=node_proj_num_layers)
     model.model.set_pairwise_encoder(lpformer_model)
     model.model.set_linkgpt_special_token_emb(special_token_id_ls, LINKGPT_SPECIAL_TOKENS)
+    model.model.set_type_embeddings(num_node_types, num_relation_types)
     
     if apply_lora:
         model = init_adapter(config, model, model_args, finetuning_args, is_trainable)

@@ -70,7 +70,23 @@ class LinkGPTDataCollator():
         attention_mask_mat = pad_sequence(attention_mask_list, batch_first=True, padding_value=0)
         labels_mat = pad_sequence(labels_list, batch_first=True, padding_value=IGNORE_INDEX)
         graph_data_list = [i[1] for i in batch]
-        graph_data = {key: [gd[key] for gd in graph_data_list] for key in graph_data_list[0].keys()}
+        
+        all_keys = set()
+        for gd in graph_data_list:
+            all_keys.update(gd.keys())
+
+        graph_data = {}
+        for key in all_keys:
+            values = []
+            for gd in graph_data_list:
+                if key in gd:
+                    values.append(gd[key])
+                else:
+                    if key in {'source_node', 'source_node_type'}:
+                        values.append(-1)
+                    else:
+                        values.append([])
+            graph_data[key] = values        
         
         data = {
             'input_ids': input_ids_mat,

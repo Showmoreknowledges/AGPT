@@ -1,4 +1,4 @@
-from typing import List, Tuple, Dict, Callable, Set
+from typing import List, Tuple, Dict, Callable, Set, Optional
 from dataclasses import dataclass
 import random
 from concurrent.futures import ThreadPoolExecutor
@@ -46,6 +46,9 @@ class NPDatasetConfig:
     
     generate_at_initialization: bool = True
 
+    node_id2type: Optional[Dict[int, int]] = None
+    default_node_type: int = 0
+
 class NPDataset(Dataset):
     def __init__(self, dgl_graph, gnid2text: Dict[int, str], config: NPDatasetConfig, tokenizer):
         self.dgl_graph = dgl_graph
@@ -56,6 +59,11 @@ class NPDataset(Dataset):
         self.lengths = None
         self.column_names = ['length'] # This was added to group the texts by length, but it's abandoned in the current version. Please ignore it.
         
+        self.node_id2type = dict(config.node_id2type) if config.node_id2type is not None else {}
+        self.default_node_type = getattr(config, 'default_node_type', 0)
+        self.num_node_types = max(self.node_id2type.values(), default=-1) + 1 if self.node_id2type else 1
+        self.config.node_id2type = self.node_id2type if self.node_id2type else None
+
         self.np_data_list = None
         if self.config.generate_at_initialization:
             self.generate_np_data_list()
@@ -120,12 +128,20 @@ def np_data_to_prompt_and_graph_data(gnid2text: Dict[int, str], np_data: NPData,
         'source_node': -1,
         'node_id_ls': [],
         'pairwise_target_id_ls': [],
+        'node_type_ls': [],
+        'pairwise_target_type_ls': [],
+        'pairwise_relation_type_ls': [],
     }
     src = np_data.src_node
     graph_data['source_node'] = src
     src_text = get_text_with_encoding_token(src, config, gnid2text, do_pairwise=False) + '\n'
     graph_data['node_id_ls'] += [(src, i) for i in range(config.node_encoding_max_hop + 1)]
     
+    node_type_lookup = getattr(config, 'node_id2type', None)
+    default_node_type = getattr(config, 'default_node_type', 0)
+    if node_type_lookup is not None:
+        graph_data['node_type_ls'] += [node_type_lookup.get(src, default_node_type) for _ in range(config.node_encoding_max_hop + 1)]
+
     neighbor_text_ls = ["text: " + gnid2text[neighbor] for neighbor in np_data.neighbors]
     neighbor_text_all = '\n'.join(neighbor_text_ls)
     

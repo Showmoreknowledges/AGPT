@@ -1,4 +1,4 @@
-from typing import List, Tuple, Dict, Callable, Set
+from typing import List, Tuple, Dict, Callable, Set, Iterable, Optional
 from dataclasses import dataclass
 import random
 from concurrent.futures import ThreadPoolExecutor
@@ -25,10 +25,36 @@ LINKGPT_SPECIAL_TOKENS = [
     PAIRWISE_TOKEN,
 ]
 
-def sample_neg_tgt(num_neg_tgt: int, pos_tgt_set: Set[int], total_node_num: int):
+def sample_neg_tgt(num_neg_tgt: int, pos_tgt_set: Set[int], total_node_num: int, candidate_pool: Optional[Iterable[int]] = None):
+    """Sample negative targets that respect optional candidate pools.
+
+    Args:
+        num_neg_tgt: Number of negatives to sample.
+        pos_tgt_set: Set of positive target node ids to avoid.
+        total_node_num: Total number of nodes in the (merged) graph. Used when
+            ``candidate_pool`` is not provided.
+        candidate_pool: Optional iterable of node ids that negatives should be
+            drawn from. When provided, negatives are sampled exclusively from
+            this pool after removing positives.
+
+    Returns:
+        A list of sampled negative node ids. If the candidate pool does not
+        contain enough nodes, as many unique negatives as possible will be
+        returned (potentially fewer than ``num_neg_tgt``).
     """
-    Randomly sample `total_node_num` elements from `pos_tgt_set`, and ensure that no sampled elements are in `pos_tgt_set`
-    """
+
+    if num_neg_tgt <= 0:
+        return []
+
+    if candidate_pool is not None:
+        candidate_ls = list(dict.fromkeys(candidate_pool))
+        candidate_ls = [nid for nid in candidate_ls if nid not in pos_tgt_set]
+        if not candidate_ls:
+            return []
+        if len(candidate_ls) < num_neg_tgt:
+            return random.sample(candidate_ls, len(candidate_ls))
+        return random.sample(candidate_ls, num_neg_tgt)
+    
     while True:
         neg_tgt_list = random.sample(range(total_node_num), num_neg_tgt)
         if not any(neg_tgt in pos_tgt_set for neg_tgt in neg_tgt_list):
