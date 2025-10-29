@@ -24,9 +24,6 @@ from linkgpt.utils import basics
 from dataset import TAGDatasetForLM
 
 
-# ===========================================================
-# 🔧 训练函数
-# ===========================================================
 def train_epoch(model, train_loader, optimizer, lr_scheduler, step, device):
     model.train()
     total_loss = 0.0
@@ -89,7 +86,7 @@ def main():
     # =======================================================
     with open(args.dataset_for_lm_path, 'rb') as f:
         dataset_for_lm = pickle.load(f)
-    print(f"✅ 已加载 dataset_for_lm.pkl ({len(dataset_for_lm)} 个节点)")
+    print(f" 已加载 dataset_for_lm.pkl ({len(dataset_for_lm)} 个节点)")
 
     # 自动检测数据目录
     data_dir = args.data_dir or os.path.dirname(args.dataset_for_lm_path)
@@ -102,7 +99,7 @@ def main():
 
     if os.path.exists(merged_features_path):
         dataset_for_lm.features = torch.load(merged_features_path)
-        print(f"✅ 已加载特征矩阵: {dataset_for_lm.features.shape}")
+        print(f" 已加载特征矩阵: {dataset_for_lm.features.shape}")
     else:
         dataset_for_lm.features = None
         print("⚠️ 未检测到 merged_features.pt，将仅使用文本特征")
@@ -110,19 +107,15 @@ def main():
     if os.path.exists(gnid2text_path):
         with open(gnid2text_path, "r", encoding="utf-8") as f:
             dataset_for_lm.gnid2text = json.load(f)
-        print(f"✅ 已加载 gnid2text.json ({len(dataset_for_lm.gnid2text)} 条文本)")
+        print(f" 已加载 gnid2text.json ({len(dataset_for_lm.gnid2text)} 条文本)")
     else:
         dataset_for_lm.gnid2text = None
         print("⚠️ 未检测到 gnid2text.json，将仅使用数值特征")
 
-    # =======================================================
     # 3️⃣ 自动适配 text_field（原版 LinkGPT 所需）
-    # =======================================================
     dataset_for_lm.text_field = "text" if dataset_for_lm.gnid2text is not None else "feature"
 
-    # =======================================================
     # 4️⃣ 构造 CGTPDataset
-    # =======================================================
     get_text = (
         (lambda x: x.get("text", ""))
         if dataset_for_lm.gnid2text is not None
@@ -178,7 +171,7 @@ def main():
     # =======================================================
     os.makedirs(os.path.dirname(args.ckpt_save_path), exist_ok=True)
     torch.save(cgtp_model.state_dict(), args.ckpt_save_path)
-    print(f"\n✅ 模型已保存至: {args.ckpt_save_path}")
+    print(f"\n 模型已保存至: {args.ckpt_save_path}")
 
 
 if __name__ == '__main__':
