@@ -33,11 +33,45 @@ class MultiLayerGraphDataset(Dataset):
             return int(digits) if digits else 1
 
         def _ensure_edge_tensor(edge_value) -> torch.Tensor:
+            # 支持多种输入格式：torch.Tensor, np.ndarray, list/tuple
             if isinstance(edge_value, torch.Tensor):
                 return edge_value.long()
             if isinstance(edge_value, np.ndarray):
-                return torch.from_numpy(edge_value).long()
-            raise TypeError(f"Unsupported edge_index type: {type(edge_value)}")
+                arr = edge_value
+            elif isinstance(edge_value, (list, tuple)):
+                # 处理常见的 list 格式：
+                # - [(u,v), ...]  -> (E,2) -> 转为 (2,E)
+                # - [u_list, v_list] -> (2,E)
+                try:
+                    arr = np.asarray(edge_value)
+                except Exception:
+                    # 尝试手工展开为二维数组
+                    arr = np.array([list(x) for x in edge_value])
+                # 有时会得到 dtype=object，如果是列表对，尝试强制转换
+                if arr.dtype == object:
+                    try:
+                        arr = np.array([list(x) for x in edge_value])
+                    except Exception:
+                        raise TypeError(f"Unsupported edge_index list contents: {edge_value}")
+            else:
+                raise TypeError(f"Unsupported edge_index type: {type(edge_value)}")
+
+            # 现在 arr 应为 numpy 数组，规范为形状 (2, E)
+            if arr.ndim == 1:
+                # 一维数组可能是扁平的索引，不支持
+                raise TypeError("edge_index must be shape (2, E) or (E, 2), not 1D list/array")
+            if arr.ndim == 2 and arr.shape[0] == 2:
+                tensor = torch.from_numpy(arr).long()
+            elif arr.ndim == 2 and arr.shape[1] == 2:
+                tensor = torch.from_numpy(arr.T).long()
+            else:
+                # 尝试扁平化再转换（适用于 (E,) of pairs）
+                try:
+                    flat = np.reshape(arr, (2, -1))
+                    tensor = torch.from_numpy(flat).long()
+                except Exception:
+                    raise TypeError(f"Unsupported edge_index array shape: {arr.shape}")
+            return tensor.contiguous()
 
         def _normalise_feature(raw_value, n_nodes):
             if isinstance(raw_value, np.ndarray):
@@ -156,11 +190,37 @@ class MultiLayerGraphDataset(Dataset):
 
 def merge_graphs(edge_index1, edge_index2=None, x1=None, x2=None):
     def _to_edge_tensor(value):
+        # Accept torch.Tensor, np.ndarray, list/tuple and normalize to (2, E) torch.LongTensor
         if isinstance(value, torch.Tensor):
             return value.long()
         if isinstance(value, np.ndarray):
-            return torch.from_numpy(value).long()
-        raise TypeError(f"Unsupported edge_index type: {type(value)}")
+            arr = value
+        elif isinstance(value, (list, tuple)):
+            try:
+                arr = np.asarray(value)
+            except Exception:
+                arr = np.array([list(x) for x in value])
+            if arr.dtype == object:
+                try:
+                    arr = np.array([list(x) for x in value])
+                except Exception:
+                    raise TypeError(f"Unsupported edge_index list contents: {value}")
+        else:
+            raise TypeError(f"Unsupported edge_index type: {type(value)}")
+
+        if arr.ndim == 1:
+            raise TypeError("edge_index must be shape (2, E) or (E, 2), not 1D list/array")
+        if arr.ndim == 2 and arr.shape[0] == 2:
+            tensor = torch.from_numpy(arr).long()
+        elif arr.ndim == 2 and arr.shape[1] == 2:
+            tensor = torch.from_numpy(arr.T).long()
+        else:
+            try:
+                flat = np.reshape(arr, (2, -1))
+                tensor = torch.from_numpy(flat).long()
+            except Exception:
+                raise TypeError(f"Unsupported edge_index array shape: {arr.shape}")
+        return tensor.contiguous()
 
     if isinstance(edge_index1, (list, tuple)):
         edge_indices_raw = list(edge_index1)

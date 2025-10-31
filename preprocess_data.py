@@ -31,6 +31,10 @@ if __name__ == "__main__":
     gnid2text, merged_features = process_node_features_for_cgtp(
         dataset.features, num_nodes_per_layer, layer_offsets
     )
+    # 将对齐对映射到合并后的全局节点 id 空间
+    train_pairs_merged, test_pairs_merged = process_alignment_pairs(
+        dataset.pos_pairs, dataset.test_pairs, layer_offsets
+    )
     
     def _tensor_pairs_to_list(pairs: torch.Tensor) -> List[Tuple[int, int]]:
         if pairs.numel() == 0:

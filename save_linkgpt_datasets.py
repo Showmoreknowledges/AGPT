@@ -1,11 +1,11 @@
 import os
 import argparse
 import sys
-from linkgpt.dataset.tag_dataset_for_lm import tag_dataset_for_lm_to_dgl_graph
-from linkgpt.dataset.yn_dataset import YNDataset, YNDatasetConfig
-from linkgpt.dataset.np_dataset import NPDataset, NPDatasetConfig
-from linkgpt.model.linkgpt_model import get_tokenizer
-from linkgpt.utils import basics
+from dataset.tag_dataset_for_lm import tag_dataset_for_lm_to_dgl_graph
+from dataset.yn_dataset import YNDataset, YNDatasetConfig
+from dataset.np_dataset import NPDataset, NPDatasetConfig
+from model.linkgpt_model import get_tokenizer
+from utils import basics
 
 
 project_path = os.path.abspath(os.path.dirname(__file__))
