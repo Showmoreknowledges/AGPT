@@ -6,7 +6,7 @@ import torch
 from typing import Dict, List, Tuple, Optional
 
 
-from dataset import TAGDatasetForLM
+from dataset.tag_dataset_for_lm import TAGDatasetForLM
 # 导入 dataset.py 中定义的类和函数
 from Mul_dataset import (
     MultiLayerGraphDataset,
@@ -44,9 +44,10 @@ if __name__ == "__main__":
     combined_pairs: List[Tuple[int, int]] = []
     for tensor in (train_pairs_merged, test_pairs_merged):
         combined_pairs.extend(_tensor_pairs_to_list(tensor))
-
+    
     # 定义每个正样本对应的负样本数量
-    NUM_NEG_SAMPLES = 100
+    NUM_NEG_SAMPLES = 100 
+
     def _sample_neg_targets(pos_pairs: torch.Tensor, num_neg: int) -> torch.Tensor:
         """
         为给定的正样本对采样 num_neg 个负目标节点。
@@ -72,7 +73,6 @@ if __name__ == "__main__":
     # 生成负样本
     test_neg_targets_merged = _sample_neg_targets(test_pairs_merged, NUM_NEG_SAMPLES)
     print(f"✅ 已为验证/测试集采样 {test_neg_targets_merged.numel()} 个负目标节点 ({NUM_NEG_SAMPLES}x)。")
-
 
     node_records: Dict[int, Dict[str, object]] = {}
     for node_id in range(total_num_nodes):
@@ -101,7 +101,6 @@ if __name__ == "__main__":
         section["edge"] = pairs_cpu.numpy()
         if neg_targets is not None and neg_targets.numel() > 0:
             section["target_node_neg"] = neg_targets.detach().cpu().tolist()
-
         return section
 
     print("✅ 正在将合并后的对齐链接和负样本注入 'dataset_for_lm.edge_split'...")
