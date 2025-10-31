@@ -90,7 +90,9 @@ if __name__ == "__main__":
     tag_dataset.num_nodes_per_layer = num_nodes_per_layer
     tag_dataset.total_num_nodes = total_num_nodes
 
-    def _build_edge_split_section(pairs: torch.Tensor) -> Dict[str, object]:
+    def _build_edge_split_section(
+        pairs: torch.Tensor, neg_targets: Optional[torch.Tensor] = None # <- 确保添加了 neg_targets
+    ) -> Dict[str, object]:
         pairs_cpu = pairs.detach().cpu()
         src_list: List[int] = pairs_cpu[:, 0].tolist() if pairs_cpu.numel() > 0 else []
         tgt_list: List[int] = pairs_cpu[:, 1].tolist() if pairs_cpu.numel() > 0 else []
@@ -99,8 +101,10 @@ if __name__ == "__main__":
             "target_node": tgt_list,
         }
         section["edge"] = pairs_cpu.numpy()
+        
         if neg_targets is not None and neg_targets.numel() > 0:
             section["target_node_neg"] = neg_targets.detach().cpu().tolist()
+            
         return section
 
     print("✅ 正在将合并后的对齐链接和负样本注入 'dataset_for_lm.edge_split'...")
