@@ -20,7 +20,11 @@ class TAGDatasetForLM():
         self.text_field = text_field
         self.longer_text_field = longer_text_field
         
-        self.nid_list = list(nid2data.keys())
+        if hasattr(nid2data, "keys"):
+            self.nid_list = list(nid2data.keys())
+        else:
+            self.nid_list = list(range(nid2data.size(0)))
+        
         self.nid2gnid = {nid: i for i, nid in enumerate(self.nid_list)}
         
         self.data_list = [nid2data[nid] for nid in self.nid_list]
