@@ -3,7 +3,7 @@ import argparse
 import pickle
 import json
 import torch
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
 
 from dataset import TAGDatasetForLM
@@ -45,6 +45,35 @@ if __name__ == "__main__":
     for tensor in (train_pairs_merged, test_pairs_merged):
         combined_pairs.extend(_tensor_pairs_to_list(tensor))
 
+    # 定义每个正样本对应的负样本数量
+    NUM_NEG_SAMPLES = 100
+    def _sample_neg_targets(pos_pairs: torch.Tensor, num_neg: int) -> torch.Tensor:
+        """
+        为给定的正样本对采样 num_neg 个负目标节点。
+        返回一个包含 num_pos_edges * num_neg 个元素的平铺张量。
+        """
+        if pos_pairs.numel() == 0:
+            return torch.tensor([], dtype=torch.long)
+            
+        num_pos_edges = pos_pairs.size(0)
+        num_nodes = total_num_nodes
+        
+        # 随机采样 num_pos_edges * num_neg 个节点 ID 作为负目标
+        # 采样形状: (num_pos_edges, num_neg)，然后平铺成一维列表
+        neg_targets_candidates = torch.randint(
+            low=0, 
+            high=num_nodes, 
+            size=(num_pos_edges, num_neg), 
+            dtype=torch.long
+        ).flatten()
+        
+        return neg_targets_candidates
+
+    # 生成负样本
+    test_neg_targets_merged = _sample_neg_targets(test_pairs_merged, NUM_NEG_SAMPLES)
+    print(f"✅ 已为验证/测试集采样 {test_neg_targets_merged.numel()} 个负目标节点 ({NUM_NEG_SAMPLES}x)。")
+
+
     node_records: Dict[int, Dict[str, object]] = {}
     for node_id in range(total_num_nodes):
         node_entry: Dict[str, object] = {"node_id": node_id}
@@ -70,13 +99,18 @@ if __name__ == "__main__":
             "target_node": tgt_list,
         }
         section["edge"] = pairs_cpu.numpy()
+        if neg_targets is not None and neg_targets.numel() > 0:
+            section["target_node_neg"] = neg_targets.detach().cpu().tolist()
+
         return section
 
-    print("✅ 正在将合并后的对齐链接注入 'dataset_for_lm.edge_split'...")
+    print("✅ 正在将合并后的对齐链接和负样本注入 'dataset_for_lm.edge_split'...")
+    test_split_section = _build_edge_split_section(test_pairs_merged, neg_targets=test_neg_targets_merged)
+    
     tag_dataset.edge_split = {
-        "train": _build_edge_split_section(train_pairs_merged),
-        "valid": _build_edge_split_section(test_pairs_merged),
-        "test": _build_edge_split_section(test_pairs_merged),
+        "train": _build_edge_split_section(train_pairs_merged), # 训练集无需负样本
+        "valid": test_split_section,
+        "test": test_split_section,
     }
     tag_dataset.generate_gnid2neighbors_train()
 
