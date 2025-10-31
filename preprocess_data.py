@@ -3,6 +3,8 @@ import argparse
 import pickle
 import json
 import torch
+from typing import Dict, List, Tuple
+
 
 from dataset import TAGDatasetForLM
 # 导入 dataset.py 中定义的类和函数
@@ -23,14 +25,56 @@ if __name__ == "__main__":
     os.makedirs(f"{args.output_dir}/{args.data}", exist_ok=True)
     dataset = MultiLayerGraphDataset(args.data_path)
 
-    merged_edge_index, merged_x, mapping_g2_to_merged, n1, n2, n_total = merge_graphs(
-        dataset.edge_index1, dataset.edge_index2, dataset.x1, dataset.x2
+    merged_edge_index, _, layer_offsets, num_nodes_per_layer, total_num_nodes = merge_graphs(
+        dataset.edge_indices, dataset.features
     )
     gnid2text, merged_features = process_node_features_for_cgtp(
-        dataset.x1, dataset.x2, n1, n2, mapping_g2_to_merged
+        dataset.features, num_nodes_per_layer, layer_offsets
     )
-    train_pairs_merged, test_pairs_merged = process_alignment_pairs(dataset.pos_pairs, dataset.test_pairs, n1)
-    tag_dataset = TAGDatasetForLM(merged_edge_index, gnid2text, merged_features)
+    
+    def _tensor_pairs_to_list(pairs: torch.Tensor) -> List[Tuple[int, int]]:
+        if pairs.numel() == 0:
+            return []
+        return [(int(src), int(tgt)) for src, tgt in pairs.tolist()]
+
+    combined_pairs: List[Tuple[int, int]] = []
+    for tensor in (train_pairs_merged, test_pairs_merged):
+        combined_pairs.extend(_tensor_pairs_to_list(tensor))
+
+    node_records: Dict[int, Dict[str, object]] = {}
+    for node_id in range(total_num_nodes):
+        node_entry: Dict[str, object] = {"node_id": node_id}
+        if gnid2text is not None:
+            node_entry["text"] = gnid2text.get(node_id, "")
+        else:
+            node_entry["text"] = ""
+        node_records[node_id] = node_entry
+
+    tag_dataset = TAGDatasetForLM(node_records, combined_pairs)
+    tag_dataset.features = merged_features
+    tag_dataset.gnid2text = gnid2text if gnid2text is not None else None
+    tag_dataset.layer_offsets = layer_offsets
+    tag_dataset.num_nodes_per_layer = num_nodes_per_layer
+    tag_dataset.total_num_nodes = total_num_nodes
+
+    def _build_edge_split_section(pairs: torch.Tensor) -> Dict[str, object]:
+        pairs_cpu = pairs.detach().cpu()
+        src_list: List[int] = pairs_cpu[:, 0].tolist() if pairs_cpu.numel() > 0 else []
+        tgt_list: List[int] = pairs_cpu[:, 1].tolist() if pairs_cpu.numel() > 0 else []
+        section: Dict[str, object] = {
+            "source_node": src_list,
+            "target_node": tgt_list,
+        }
+        section["edge"] = pairs_cpu.numpy()
+        return section
+
+    print("✅ 正在将合并后的对齐链接注入 'dataset_for_lm.edge_split'...")
+    tag_dataset.edge_split = {
+        "train": _build_edge_split_section(train_pairs_merged),
+        "valid": _build_edge_split_section(test_pairs_merged),
+        "test": _build_edge_split_section(test_pairs_merged),
+    }
+    tag_dataset.generate_gnid2neighbors_train()
 
     # === 清理 features 再保存对象 ===
     output_dir = f"{args.output_dir}/{args.data}"
@@ -46,17 +90,8 @@ if __name__ == "__main__":
         print(f"✅ merged_features 已单独保存 ({merged_features.shape})")
 
     # 3️⃣ 清空特征再保存 dataset 对象
-    # LinkGPT 的 YNDataset 会从 'edge_split' 属性中读取链接预测任务。
-    # 我们将合并后的“对齐锚点对”注入此处。
-    # YNDataset 会自动使用 'edge' 作为正样本，并为其生成负样本。
-    print("✅ 正在将合并后的对齐链接注入 'dataset_for_lm.edge_split'...")
-    tag_dataset.edge_split = {
-        'train': {'edge': train_pairs_merged.numpy()},
-        'valid': {'edge': test_pairs_merged.numpy()}, # 我们使用 'valid' 作为验证/测试集
-        'test': {'edge': test_pairs_merged.numpy()},
-    }
-    
     tag_dataset.features = None
+    tag_dataset.gnid2text = None
     with open(os.path.join(output_dir, "dataset_for_lm.pkl"), "wb") as f:
         pickle.dump(tag_dataset, f)
     print(f"✅ dataset_for_lm.pkl 保存完成（已注入对齐链接）") 
