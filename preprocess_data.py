@@ -66,7 +66,7 @@ if __name__ == "__main__":
             high=num_nodes, 
             size=(num_pos_edges, num_neg), 
             dtype=torch.long
-        ).flatten()
+        )
         
         return neg_targets_candidates
 
@@ -102,6 +102,7 @@ if __name__ == "__main__":
         }
         section["edge"] = pairs_cpu.numpy()
         
+        # 确保这部分代码也已添加
         if neg_targets is not None and neg_targets.numel() > 0:
             section["target_node_neg"] = neg_targets.detach().cpu().tolist()
             

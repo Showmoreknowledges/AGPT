@@ -17,8 +17,8 @@ import joblib  # Make ogb loads faster...idk
 from ogb.linkproppred import PygLinkPropPredDataset
 import dgl
 
-from ..dataset.tag_dataset_for_lm import TAGDatasetForLM
-from ..utils import basics
+from dataset.tag_dataset_for_lm import TAGDatasetForLM
+from utils import basics
 
 def get_lpformer_dataset(dataset_name: str, split_edge, dgl_g, ppr_data, device):
     """

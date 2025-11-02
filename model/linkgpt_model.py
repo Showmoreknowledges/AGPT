@@ -15,16 +15,16 @@ from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutpu
 from transformers.integrations import is_deepspeed_zero3_enabled
 from peft import PeftConfig, PeftModel
 
-import llmtuner
-from llmtuner.model.patcher import patch_config, patch_model, patch_tokenizer, patch_valuehead_model
-from llmtuner.model.loader import init_adapter
+import llamafactory as llmtuner
+from llamafactory.model.patcher import patch_config, patch_model, patch_tokenizer, patch_valuehead_model
+from llamafactory.model.loader import init_adapter
 
-from ..dataset.linkgpt_dataset import NODE_START_TOKEN, NODE_TOKEN, PAIRWISE_START_TOKEN, \
+from dataset.linkgpt_dataset import NODE_START_TOKEN, NODE_TOKEN, PAIRWISE_START_TOKEN, \
     PAIRWISE_TOKEN, LINKGPT_SPECIAL_TOKENS, IGNORE_INDEX
-from ..dataset.tag_dataset_for_lm import TAGDatasetForLM
-from ..pairwise_encoding.models.link_transformer import LinkTransformer
-from ..pairwise_encoding.lpformer_model_api import get_lpformer_model
-from ..utils import basics
+from dataset.tag_dataset_for_lm import TAGDatasetForLM
+from pairwise_encoding.models.link_transformer import LinkTransformer
+from pairwise_encoding.lpformer_model_api import get_lpformer_model
+from utils import basics
 
 class LinkGPTConfig(LlamaConfig):
     model_type = "LinkGPT"
@@ -442,7 +442,7 @@ def get_model_and_tokenizer(
     config = AutoConfig.from_pretrained(model_args.model_name_or_path, **config_kwargs)
     config.num_node_types = max(1, int(num_node_types))
     config.num_relation_types = max(1, int(num_relation_types))
-    patch_config(config, tokenizer, model_args, config_kwargs, is_trainable, add_valuehead=False)
+    patch_config(config, tokenizer, model_args, config_kwargs, is_trainable)
     
     config_kwargs.pop("config", None)
     config_kwargs.pop("torch_dtype", None)
@@ -452,6 +452,7 @@ def get_model_and_tokenizer(
         model = LinkGPTForCausalLM.from_pretrained(
             model_args.model_name_or_path,
             config=config,
+            use_safetensors=True,
             torch_dtype=model_args.compute_dtype,
             low_cpu_mem_usage=(not is_deepspeed_zero3_enabled()),
             device_map='auto',
@@ -460,6 +461,7 @@ def get_model_and_tokenizer(
     else:
         model = LinkGPTForCausalLM.from_pretrained(
             model_args.model_name_or_path,
+            use_safetensors=True,
             config=config,
             torch_dtype=model_args.compute_dtype,
             low_cpu_mem_usage=(not is_deepspeed_zero3_enabled()),
@@ -486,6 +488,7 @@ def load_model_and_tokenizer(
     ft_model_path: int,
     stage: int,
     compute_dtype=torch.float16,
+    use_safetensors=True,
 ):
     tokenizer = get_tokenizer(model_name_or_path)
     special_token_id_ls = [tokenizer.vocab[token] for token in LINKGPT_SPECIAL_TOKENS]

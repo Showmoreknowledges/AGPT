@@ -1,78 +1,87 @@
-import argparse
-import os
-import sys
-import pickle
+import random
+from typing import Callable
 
+import numpy as np
 import torch
 from torch.utils import data
-from tqdm import tqdm
-import dgl
+from transformers import BertTokenizer, BertModel, BertConfig
 
-project_path = os.path.abspath(os.path.join(os.path.abspath(__file__), "../../..")) # path to LinkGPT
-if project_path not in sys.path:
-    sys.path.insert(0, project_path)
-from linkgpt.dataset.tag_dataset_for_lm import TAGDatasetForLM, tag_dataset_for_lm_to_dgl_graph
-from linkgpt.text_graph_pretraining.graph_text_dataset import CGTPDataset
-from linkgpt.text_graph_pretraining.graph_text_model import CGTPModel
-from linkgpt.utils import basics
+from dataset.tag_dataset_for_lm import TAGDatasetForLM
 
-
-def main():
-    parser = argparse.ArgumentParser()
+class CGTPDataset(data.Dataset):
+    """
+    Dataset for Contrastive Graph Text Pretraining (CGTP)
+    """
+    def __init__(
+        self,
+        get_text: Callable,
+        num_neighbor: int,
+        tag_dataset_for_lm: TAGDatasetForLM,
+        text_encoder_name: str='bert-base-uncased',
+        max_length: int=64
+    ):
+        """
+        Args:
+            get_text: function, input: tag_dataset_for_lm.data_list[i], output: corresponding text 
+            num_neighbor (int): number of neighbors to sample
+            tag_dataset_for_lm (TAGDatasetForLM)
+            text_encoder_name (str): 
+            max_length (int): max number of tokens
+        """
+        self.num_neighbor = num_neighbor
+        self.tokenizer = BertTokenizer.from_pretrained(text_encoder_name)
+        self.tag_dataset_for_lm = tag_dataset_for_lm
+        self.get_text = get_text
+        self.max_length = max_length
     
-    parser.add_argument('--dataset_for_lm_path', required=True, type=str, help='path of dataset_for_lm (input)')
-    parser.add_argument('--embedding_save_path', required=True, type=str, help='path of the embedding (output)')
-    parser.add_argument('--dataset_name', required=True, type=str)
-    parser.add_argument('--ckpt_save_path', required=True, type=str, help='path of the checkpoint of cgtp model')
-    
-    parser.add_argument('-b', '--batch_size', default=8, type=int)
-    parser.add_argument('--max_text_length', default=64, type=int)
-    parser.add_argument('--num_neighbor', default=5, type=int)
-    parser.add_argument('-t', '--text_encoder_name', default='bert-base-uncased')
-    parser.add_argument('--device', default=None)
-    
-    args = parser.parse_args()
-        
-    print(f'dataset_for_lm_path: {args.dataset_for_lm_path}')
-    print(f'embedding_save_path: {args.embedding_save_path}')
-    print(f'dataset_name: {args.dataset_name}')
-    print(f'ckpt_save_path: {args.ckpt_save_path}')
-    
-    
-    get_text = lambda x: x[dataset_for_lm.text_field] if dataset_for_lm.text_field in x.keys() else ""
-    dataset_for_lm = basics.load_pickle(args.dataset_for_lm_path)
-    cgtp_dataset = CGTPDataset(get_text, args.num_neighbor, dataset_for_lm, args.text_encoder_name, args.max_text_length)
-    if args.device:
-        device = args.device
-    else:
-        device = basics.get_device()
-        
-    cgtp_model = CGTPModel().to(device)
-    state_dict = torch.load(args.ckpt_save_path, map_location=device)
-    cgtp_model.load_state_dict(state_dict, strict=False)
-    print('CGTP model loaded')
-    
-    cgtp_dataloader = data.DataLoader(cgtp_dataset, batch_size=args.batch_size, shuffle=False)
-    
-    cgtp_model.eval()
-    all_node_emb = None
-    for batch in tqdm(cgtp_dataloader):
-        center_input, neighbor_input, neighbor_mask, _, _ = batch
-        for part in [center_input, neighbor_input]:
-            for k in part.keys():
-                part[k] = part[k].to(device)
-        neighbor_mask = neighbor_mask.to(device)
-        with torch.no_grad():
-            batch_node_emb = cgtp_model.graph_encoder(center_input, neighbor_input, neighbor_mask)
-        if all_node_emb is None:
-            all_node_emb = batch_node_emb
-        else:
-            all_node_emb = torch.concat([all_node_emb, batch_node_emb], dim=0)
+    def __getitem__(self, idx: int):
+        '''
+        Output:
+            center_input: [B, L]
+            neighbor_input: [B, N, L]
+            neighbor_mask: [B, N]
+            All have key "input_ids" and "attention_mask", with shapes indicated above
             
-    all_node_emb = all_node_emb.to('cpu')
-    torch.save(all_node_emb, args.embedding_save_path)
+            B: batch size
+            N: number of neighbors
+            L: hidden dimensions
+        '''
+        gnid = idx
+        center_text = self.get_text(self.tag_dataset_for_lm.data_list[gnid])
+        
+        neighbor_gnids = self.tag_dataset_for_lm.get_neighbors_in_training_set(gnid)
+        full_neighbor_texts = [self.get_text(self.tag_dataset_for_lm.data_list[gnid]) for gnid in neighbor_gnids]
+        
+        center_input, neighbor_input, neighbor_mask, all_input, all_mask = text_to_cgtp_input(center_text, full_neighbor_texts, self.tokenizer, self.max_length, self.num_neighbor)
+        return center_input, neighbor_input, neighbor_mask, all_input, all_mask
+        
+    def __len__(self):
+        return len(self.tag_dataset_for_lm.data_list)
 
 
-if __name__ == '__main__':
-    main()
+def text_to_cgtp_input(
+    center_text: str,
+    full_neighbor_texts: list,
+    tokenizer,
+    max_length: int,
+    num_neighbor: int
+):
+    neighbor_texts = random.sample(full_neighbor_texts, min(len(full_neighbor_texts), num_neighbor)) + [''] * (num_neighbor - len(full_neighbor_texts))
+    neighbor_mask = torch.ones(num_neighbor)
+    for i in range(num_neighbor):
+        if neighbor_texts[i] == '':
+            neighbor_mask[i] = 0
+    
+    all_input = tokenizer([center_text] + neighbor_texts, return_tensors='pt', padding='max_length', truncation=True, max_length=max_length)
+    center_input = {
+        'input_ids': all_input['input_ids'][0],
+        'attention_mask': all_input['attention_mask'][0],
+    }
+    neighbor_input = {
+        'input_ids': all_input['input_ids'][1:],
+        'attention_mask': all_input['attention_mask'][1:]
+    }
+    
+    all_mask = torch.tensor([1] + neighbor_mask.numpy().tolist())
+    return center_input, neighbor_input, neighbor_mask, all_input, all_mask
 

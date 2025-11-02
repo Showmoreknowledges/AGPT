@@ -3,6 +3,10 @@ import pickle
 import json
 import os
 import sys
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+    
 import argparse
 from unittest.mock import patch
 import copy
@@ -20,29 +24,29 @@ from transformers import DataCollatorForLanguageModeling, Trainer, HfArgumentPar
 from transformers.trainer_pt_utils import LengthGroupedSampler, RandomSampler
 import wandb
 
-import llmtuner
-from llmtuner.model.patcher import patch_config, patch_model, patch_tokenizer, patch_valuehead_model
-from llmtuner.hparams.parser import get_train_args
-import llmtuner.hparams.parser as llm_tuner_parser
-from llmtuner.extras.misc import count_parameters
-from llmtuner.model.loader import init_adapter
+import llamafactory as llmtuner
+from llamafactory.model.patcher import patch_config, patch_model, patch_tokenizer, patch_valuehead_model
+from llamafactory.hparams.parser import get_train_args
+import llamafactory.hparams.parser as llm_tuner_parser
+from llamafactory.extras.misc import count_parameters
+from llamafactory.model.loader import init_adapter
 
 project_path = os.path.abspath(os.path.join(os.path.abspath(__file__), "../../..")) # path to LinkGPT
 if project_path not in sys.path:
     sys.path.insert(0, project_path)
-from linkgpt.dataset.tag_dataset_for_lm import TAGDatasetForLM, tag_dataset_for_lm_to_dgl_graph
-from linkgpt.pairwise_encoding.lpformer_dataset import get_lpformer_dataset
-from linkgpt.pairwise_encoding.models.link_transformer import LinkTransformer
-from linkgpt.pairwise_encoding.lpformer_model_api import get_lpformer_model
-from linkgpt.model.linkgpt_model import LinkGPTForCausalLM, LinkGPTConfig, \
+from dataset.tag_dataset_for_lm import TAGDatasetForLM, tag_dataset_for_lm_to_dgl_graph
+from pairwise_encoding.lpformer_dataset import get_lpformer_dataset
+from pairwise_encoding.models.link_transformer import LinkTransformer
+from pairwise_encoding.lpformer_model_api import get_lpformer_model
+from model.linkgpt_model import LinkGPTForCausalLM, LinkGPTConfig, \
     unfreeze_graph_related_modules, unfreeze_lora_adapter, freeze_all_parameters, \
         save_lora_model, get_model_and_tokenizer, get_tokenizer, load_model_and_tokenizer
-from linkgpt.dataset.linkgpt_dataset import LinkGPTDataset, LinkGPTDataCollator
-from linkgpt.dataset.yn_dataset import YNDataset, YNDatasetConfig
-from linkgpt.dataset.np_dataset import NPDataset, NPDatasetConfig
-from linkgpt.dataset.utils import NODE_START_TOKEN, NODE_TOKEN, PAIRWISE_START_TOKEN, \
+from dataset.linkgpt_dataset import LinkGPTDataset, LinkGPTDataCollator
+from dataset.yn_dataset import YNDataset, YNDatasetConfig
+from dataset.np_dataset import NPDataset, NPDatasetConfig
+from dataset.utils import NODE_START_TOKEN, NODE_TOKEN, PAIRWISE_START_TOKEN, \
     PAIRWISE_TOKEN, LINKGPT_SPECIAL_TOKENS
-from linkgpt.utils import basics
+from utils import basics
 
 
 def main():

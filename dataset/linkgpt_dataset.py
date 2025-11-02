@@ -12,7 +12,7 @@ from tqdm import tqdm, trange
 import torch_sparse
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
-from ..utils import basics
+from utils import basics
 from .utils import NODE_START_TOKEN, NODE_TOKEN, PAIRWISE_START_TOKEN, PAIRWISE_TOKEN, LINKGPT_SPECIAL_TOKENS, IGNORE_INDEX
 from .np_dataset import NPDataset, NPDatasetConfig, NPData
 from .yn_dataset import YNTargetData, YNData, YNDatasetConfig, YNDataset

@@ -12,7 +12,7 @@ import torch_sparse
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 import copy
 
-from ..utils import basics
+from utils import basics
 from .utils import NODE_START_TOKEN, NODE_TOKEN, PAIRWISE_START_TOKEN, \
     PAIRWISE_TOKEN, LINKGPT_SPECIAL_TOKENS, IGNORE_INDEX, get_text_with_encoding_token, sample_neg_tgt
 

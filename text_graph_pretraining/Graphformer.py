@@ -34,6 +34,11 @@ class GraphAggregation(BertSelfAttention):
         station_embed = station_embed.squeeze(1)
 
         return station_embed
+    
+    def transpose_for_scores(self, x: torch.Tensor) -> torch.Tensor:
+        new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
+        x = x.view(new_x_shape)
+        return x.permute(0, 2, 1, 3)
 
     def multi_head_attention(self, query, key, value, attention_mask):
         query_layer = self.transpose_for_scores(query)

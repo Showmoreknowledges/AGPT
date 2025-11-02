@@ -1,8 +1,8 @@
 #!/bin/bash
 
-DATASET_NAME=amazon_clothing_20k
-LINKGPT_DATA_PATH=../../data # you can change this to any other path you like to store the data
-PROJECT_PATH=../..
+DATASET_NAME=douban
+LINKGPT_DATA_PATH=/root/autodl-tmp # you can change this to any other path you like to store the data
+PROJECT_PATH=/root/AGPT
 WANDB_KEY=None # you can set this to your own wandb key
 LINKGPT_MODEL_NAME=linkgpt-openllama-7b-cgtp
 

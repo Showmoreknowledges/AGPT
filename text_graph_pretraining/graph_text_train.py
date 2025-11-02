@@ -7,6 +7,11 @@ import argparse
 import json
 import pickle
 
+current_dir = os.path.abspath(os.path.dirname(__file__))
+project_root = os.path.abspath(os.path.join(current_dir, os.pardir))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 import torch
 from torch.utils import data
 from tqdm import tqdm
@@ -18,10 +23,10 @@ if project_path not in sys.path:
     sys.path.insert(0, project_path)
 
 # === 导入 LinkGPT 模块 ===
-from linkgpt.text_graph_pretraining.graph_text_dataset import CGTPDataset
-from linkgpt.text_graph_pretraining.graph_text_model import CGTPModel
-from linkgpt.utils import basics
-from Mul_dataset import TAGDatasetForLM
+from text_graph_pretraining.graph_text_dataset import CGTPDataset
+from text_graph_pretraining.graph_text_model import CGTPModel
+from utils import basics
+from dataset.tag_dataset_for_lm import TAGDatasetForLM
 
 
 def train_epoch(model, train_loader, optimizer, lr_scheduler, step, device):

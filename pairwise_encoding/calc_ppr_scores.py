@@ -11,6 +11,10 @@ import sys
 import argparse
 from time import time
 
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 import torch
 import numpy as np
 import pandas as pd
@@ -24,8 +28,8 @@ import dgl
 project_path = os.path.abspath(os.path.join(os.path.abspath(__file__), "../../..")) # path to LinkGPT
 if project_path not in sys.path:
     sys.path.insert(0, project_path)
-from linkgpt.utils import basics
-from linkgpt.dataset.tag_dataset_for_lm import tag_dataset_for_lm_to_dgl_graph
+from utils import basics
+from dataset.tag_dataset_for_lm import tag_dataset_for_lm_to_dgl_graph
 
 def get_ppr_matrix(edge_index, num_nodes, alpha=0.15, eps=5e-5):
     """

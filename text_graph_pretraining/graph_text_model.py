@@ -157,4 +157,4 @@ class CGTPModel(nn.Module):
         graphs_loss = cross_entropy(logits.T, targets.T, reduction='none')
         loss =  (graphs_loss + texts_loss) / 2.0 # shape: (batch_size)
         
-        return loss.mean()        
+        return loss.mean()     

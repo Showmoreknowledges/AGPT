@@ -1,6 +1,7 @@
 import os
 import argparse
 import sys
+import torch
 from dataset.tag_dataset_for_lm import tag_dataset_for_lm_to_dgl_graph
 from dataset.yn_dataset import YNDataset, YNDatasetConfig
 from dataset.np_dataset import NPDataset, NPDatasetConfig
@@ -87,7 +88,7 @@ def main():
     )
     lp_dataset = YNDataset(dgl_graph, gnid2text, lp_config, tokenizer)
     lp_dataset.config.dataset_name = args.dataset_name
-    lp_output_path = os.path.join(args.data_dir, 'lp_dataset.pkl')
+    lp_output_path = os.path.join(f"{args.data_dir}/{args.dataset_name}", 'lp_dataset.pkl')
     basics.save_pickle(lp_dataset, lp_output_path)
     print(f"已保存 LP (Alignment) 数据集到: {lp_output_path}")
 
@@ -100,7 +101,7 @@ def main():
     )
     np_dataset = NPDataset(dgl_graph, gnid2text, np_config, tokenizer)
     np_dataset.config.dataset_name = args.dataset_name
-    np_output_path = os.path.join(args.data_dir, 'np_dataset.pkl')
+    np_output_path = os.path.join(f"{args.data_dir}/{args.dataset_name}", 'np_dataset.pkl')
     basics.save_pickle(np_dataset, np_output_path)
     print(f"已保存 NP (Neighbor) 数据集到: {np_output_path}")
 
