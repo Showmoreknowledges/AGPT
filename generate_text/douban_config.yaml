@@ -1,0 +1,54 @@
+dataset_name: douban
+
+layers:
+  - name: layer_1
+    prefix: A
+    edge_path: /root/AGPT-g/data/douban/douban.npz
+    edge_key: edge_index1
+    feature_path: /root/AGPT-g/data/douban/douban.npz
+    feature_key: x1
+    is_directed: false
+
+  - name: layer_2
+    prefix: B
+    edge_path: /root/AGPT-g/data/douban/douban.npz
+    edge_key: edge_index2
+    feature_path: /root/AGPT-g/data/douban/douban.npz
+    feature_key: x2
+    is_directed: false
+
+alignment:
+  path: /root/AGPT-g/data/douban/douban.npz
+  format: npz
+  key: pos_pairs        # 如果你的 read_anchor_pairs 还用 key，就保留；如果用固定 pos_pairs 版，可以删掉
+  columns:
+    layer_1: 0
+    layer_2: 1
+
+hyper_adjacency:
+  path: /root/AGPT-g/data/douban/douban_H.npz
+  key: H
+  axis_order:
+    - layer_1
+    - layer_2
+
+output:
+  text_path: /root/autodl-tmp/prepared_data/douban/node_text.json
+  metadata_path: /root/autodl-tmp/prepared_data/douban/node_text_metadata.json
+
+text_options:
+  mode: "compact"
+  structural_features: [degree, clustering, pagerank]
+  max_cross_layer_targets: 2
+  include_paths: true
+  show_percentile: true
+  random_seed: 42
+
+
+# text_options:
+#   mode: "compact"
+#   structural_features: [degree, clustering, betweenness, closeness, pagerank]
+#   max_cross_layer_targets: 2
+#   include_paths: true
+#   show_percentile: true
+#   random_seed: 42

@@ -51,11 +51,11 @@ def main():
         print(f"源节点 {u} -> 候选目标节点: {mapping.get(u, [])}")
 
     if aligned_pair is not None:
-    hit_at_k, mrr = evaluate_hit_mrr(
-        mapping=mapping,
-        aligned_pair=aligned_pair,
-        ks=(1, 5, 10),
-    )
+        hit_at_k, mrr = evaluate_hit_mrr(
+            mapping=mapping,
+            aligned_pair=aligned_pair,
+            ks=(1, 5, 10),
+        )
     print("===== 评估结果 =====")
     for k, v in hit_at_k.items():
         print(f"Hit@{k}: {v:.4f}")
