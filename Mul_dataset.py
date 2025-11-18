@@ -188,58 +188,35 @@ class MultiLayerGraphDataset(Dataset):
         return {"pair": pair}
 
 
-def merge_graphs(edge_index1, edge_index2=None, x1=None, x2=None):
+def merge_graphs(edge_index1, edge_index2, x1=None, x2=None):
+    """合并两个图层。
+
+    Args:
+        edge_index1: 第一个图层的边索引，形状为 (2, E1)
+        edge_index2: 第二个图层的边索引，形状为 (2, E2)
+        x1: 第一个图层的节点特征（可选）
+        x2: 第二个图层的节点特征（可选）
+    """
     def _to_edge_tensor(value):
-        # Accept torch.Tensor, np.ndarray, list/tuple and normalize to (2, E) torch.LongTensor
+        """将输入转换为形状为 (2, E) 的边索引张量。
+        输入可以是 torch.Tensor 或 numpy.ndarray。
+        """
         if isinstance(value, torch.Tensor):
             return value.long()
         if isinstance(value, np.ndarray):
-            arr = value
-        elif isinstance(value, (list, tuple)):
-            try:
-                arr = np.asarray(value)
-            except Exception:
-                arr = np.array([list(x) for x in value])
-            if arr.dtype == object:
-                try:
-                    arr = np.array([list(x) for x in value])
-                except Exception:
-                    raise TypeError(f"Unsupported edge_index list contents: {value}")
-        else:
-            raise TypeError(f"Unsupported edge_index type: {type(value)}")
+            if value.ndim != 2 or (value.shape[0] != 2 and value.shape[1] != 2):
+                raise ValueError("edge_index 必须是形状为 (2, E) 或 (E, 2) 的二维数组")
+            # 如果形状是 (E, 2)，转置为 (2, E)
+            if value.shape[1] == 2:
+                value = value.T
+            return torch.from_numpy(value).long()
+        raise TypeError("edge_index 必须是 torch.Tensor 或 numpy.ndarray")
 
-        if arr.ndim == 1:
-            raise TypeError("edge_index must be shape (2, E) or (E, 2), not 1D list/array")
-        if arr.ndim == 2 and arr.shape[0] == 2:
-            tensor = torch.from_numpy(arr).long()
-        elif arr.ndim == 2 and arr.shape[1] == 2:
-            tensor = torch.from_numpy(arr.T).long()
-        else:
-            try:
-                flat = np.reshape(arr, (2, -1))
-                tensor = torch.from_numpy(flat).long()
-            except Exception:
-                raise TypeError(f"Unsupported edge_index array shape: {arr.shape}")
-        return tensor.contiguous()
-
-    if isinstance(edge_index1, (list, tuple)):
-        edge_indices_raw = list(edge_index1)
-        if edge_index2 is None:
-            feature_list = [None] * len(edge_indices_raw)
-        elif isinstance(edge_index2, (list, tuple)):
-            feature_list = list(edge_index2)
-        else:
-            raise TypeError("When passing multiple edge indices, `edge_index2` should be a sequence of features or None.")
-    else:
-        if edge_index2 is None:
-            raise ValueError("`edge_index2` must be provided when passing individual tensors.")
-        edge_indices_raw = [edge_index1, edge_index2]
-        feature_list = [x1, x2]
-
-    if len(feature_list) < len(edge_indices_raw):
-        feature_list.extend([None] * (len(edge_indices_raw) - len(feature_list)))
-    elif len(feature_list) > len(edge_indices_raw):
-        feature_list = feature_list[:len(edge_indices_raw)]
+    if edge_index2 is None:
+        raise ValueError("必须提供第二个图层的边索引(edge_index2)")
+        
+    edge_indices_raw = [edge_index1, edge_index2]
+    feature_list = [x1, x2]
 
     edge_indices = [_to_edge_tensor(idx) for idx in edge_indices_raw]
     num_nodes_per_layer = []
@@ -279,27 +256,53 @@ def merge_graphs(edge_index1, edge_index2=None, x1=None, x2=None):
         merged_edge_index = torch.zeros((2, 0), dtype=torch.long)
 
     def _feature_to_tensor(feature, n_nodes):
+        """把 feature 转为形状 (n_nodes, feat_dim) 的 float tensor。
+        - 返回 Tensor：成功
+        - 返回 torch.zeros((n_nodes,1))：当 feature 为 标量空值
+        - 返回 None：当 feature 为 非数值（字符串、dict）、缺失或无法转换
+        """
         if feature is None:
-            return torch.zeros((n_nodes, 1), dtype=torch.float32)
+            print(f"⚠️ 特征缺失: n_nodes={n_nodes}，将标记为缺失 (返回 None)")
+            return None
+    
+        # 已经是 tensor：直接转换 dtype（但随后验证行数）
         if isinstance(feature, torch.Tensor):
-            return feature.float()
-        if isinstance(feature, np.ndarray):
+            t = feature.float()
+        # numpy 数组：标量 -> 返回占位；object/str -> 视为非数值
+        elif isinstance(feature, np.ndarray):
             if feature.shape == ():
                 return torch.zeros((n_nodes, 1), dtype=torch.float32)
             if feature.dtype.kind in {"U", "S", "O"}:
                 return None
-            return torch.from_numpy(feature).float()
-        if isinstance(feature, (list, tuple)):
+            t = torch.from_numpy(feature).float()
+        # list/tuple：尝试转换为 tensor；若元素为字符串会抛异常或得到 object dtype -> 返回 None
+        elif isinstance(feature, (list, tuple)):
             try:
-                tensor = torch.tensor(feature, dtype=torch.float32)
+                t = torch.tensor(feature, dtype=torch.float32)
             except (TypeError, ValueError):
                 return None
-            if tensor.dim() == 1:
-                tensor = tensor.view(n_nodes, -1)
-            return tensor
-        if isinstance(feature, dict):
+        else:
+            # dict 或其他非数值容器，保持原语义：不可数值化
             return None
-        return None
+    
+        # 现在 t 是一个数值 tensor，统一做形状调整与基本校验
+        if t.dim() == 1:
+            # 一维特征应为 (n_nodes * feat_dim=?) 或直接 (n_nodes,)
+            # 假设一维表示每节点单值，则要求长度==n_nodes
+            if t.numel() == n_nodes:
+                t = t.view(n_nodes, 1)
+            else:
+                # 允许把一维按 (n_nodes, -1) reshape 只有在总元素数与 n_nodes 成比例时
+                if t.numel() % n_nodes == 0:
+                    t = t.view(n_nodes, -1)
+                else:
+                    raise ValueError(f"Feature length ({t.numel()}) is incompatible with n_nodes ({n_nodes}).")
+        else:
+            # 多维张量：检查首维是否等于 n_nodes
+            if t.size(0) != n_nodes:
+                raise ValueError(f"Feature first-dimension ({t.size(0)}) != n_nodes ({n_nodes}).")
+    
+        return t
 
     feature_tensors = []
     numeric_features = True

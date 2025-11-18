@@ -1,231 +1,287 @@
-﻿import argparse
-import json
+﻿from __future__ import annotations
+
+import argparse
 import os
-import random
-from typing import Dict, Tuple
+import sys
+from typing import Dict, Optional
 
-import numpy as np
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from transformers import Trainer, TrainerCallback, TrainingArguments
+from transformers import Trainer
+import wandb
 
-from Mul_dataset import AlignmentDataset
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+from llamafactory.extras.misc import count_parameters
+from llamafactory.hparams.parser import get_train_args
+
+from dataset.align_dataset import AlignDataset
+from dataset.linkgpt_dataset import LinkGPTDataCollator
+from model.linkgpt_model import (
+    freeze_all_parameters,
+    get_model_and_tokenizer,
+    save_lora_model,
+    unfreeze_graph_related_modules,
+    unfreeze_lora_adapter,
+)
+from utils import basics
 
 
-class AlignmentScoringModel(nn.Module):
-    """
-    基于节点嵌入与结构特征的网络对齐打分模型。
-    """
+def _maybe_extract_text(record, field: Optional[str]) -> Optional[str]:
+    if record is None or field is None:
+        return None
+    if isinstance(record, dict):
+        value = record.get(field)
+        if value is not None:
+            return value
+    if hasattr(record, field):
+        value = getattr(record, field)
+        if value is not None:
+            return value
+    return None
 
-    def __init__(self, embed_dim: int, hidden_dim: int = 512, dropout: float = 0.1, use_ppr: bool = True) -> None:
-        super().__init__()
-        self.use_ppr = use_ppr
-        feature_dim = embed_dim * 4 + (1 if use_ppr else 0)
 
-        hidden_mid = max(hidden_dim // 2, 64)
-        self.mlp = nn.Sequential(
-            nn.Linear(feature_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, hidden_mid),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_mid, 1),
+def build_gnid2text(dataset_for_lm, graph_label: str) -> Dict[int, str]:
+    if graph_label not in {"A", "B"}:
+        raise ValueError(f"Unsupported graph label: {graph_label}")
+
+    attr_name = f"gnid2text_{graph_label}"
+    mapping = getattr(dataset_for_lm, attr_name, None)
+    if mapping:
+        return {int(k): v for k, v in mapping.items()}
+
+    generic_mapping = getattr(dataset_for_lm, "gnid2text", None)
+    if generic_mapping:
+        return {int(k): v for k, v in generic_mapping.items()}
+
+    data_attr = "data_list_A" if graph_label == "A" else "data_list_B"
+    data_list = getattr(dataset_for_lm, data_attr, None)
+    if data_list is None:
+        data_list = getattr(dataset_for_lm, "data_list", None)
+    if data_list is None:
+        raise ValueError(
+            "dataset_for_lm is missing data_list for graph {}".format(graph_label)
         )
 
-    def forward(
-        self,
-        u_emb: torch.Tensor,
-        v_emb: torch.Tensor,
-        ppr_score: torch.Tensor = None,
-        labels: torch.Tensor = None,
-        **kwargs,
-    ) -> Dict[str, torch.Tensor]:
-        pair_features = [u_emb, v_emb, torch.abs(u_emb - v_emb), u_emb * v_emb]
-        if self.use_ppr and ppr_score is not None:
-            if ppr_score.dim() == 1:
-                ppr_score = ppr_score.unsqueeze(-1)
-            pair_features.append(ppr_score.float())
+    text_field = getattr(dataset_for_lm, "text_field", None)
+    longer_text_field = getattr(dataset_for_lm, "longer_text_field", None)
 
-        pair_feature = torch.cat(pair_features, dim=-1)
-        logits = self.mlp(pair_feature).squeeze(-1)
-
-        output: Dict[str, torch.Tensor] = {"logits": logits}
-        if labels is not None:
-            labels = labels.float()
-            loss = F.binary_cross_entropy_with_logits(logits, labels)
-            output["loss"] = loss
-            output["labels"] = labels
-        return output
+    gnid2text: Dict[int, str] = {}
+    for idx, record in enumerate(data_list):
+        text_val = _maybe_extract_text(record, text_field)
+        if text_val is None:
+            text_val = _maybe_extract_text(record, longer_text_field)
+        if text_val is None:
+            raise ValueError(
+                f"Unable to locate textual field for node {idx} in graph {graph_label}"
+            )
+        gnid2text[idx] = text_val
+    return gnid2text
 
 
-class NegativeResampleCallback(TrainerCallback):
-    """
-    每个 epoch 开始时重新采样负样本，增强训练的鲁棒性。
-    """
-
-    def __init__(self, dataset: AlignmentDataset) -> None:
-        self.dataset = dataset
-
-    def on_epoch_begin(self, args, state, control, **kwargs) -> None:  # type: ignore[override]
-        self.dataset.resample_negatives()
-        return control
-
-
-def compute_metrics(eval_pred: Tuple[np.ndarray, np.ndarray]) -> Dict[str, float]:
-    logits, labels = eval_pred
-    if isinstance(logits, tuple):
-        logits = logits[0]
-    probs = 1.0 / (1.0 + np.exp(-logits))
-
-    preds = (probs >= 0.5).astype(np.float32)
-    labels = labels.astype(np.float32)
-
-    accuracy = float((preds == labels).mean())
-    tp = float(np.sum((preds == 1.0) * (labels == 1.0)))
-    fp = float(np.sum((preds == 1.0) * (labels == 0.0)))
-    fn = float(np.sum((preds == 0.0) * (labels == 1.0)))
-
-    eps = 1e-8
-    precision = tp / (tp + fp + eps)
-    recall = tp / (tp + fn + eps)
-    f1 = 2 * precision * recall / (precision + recall + eps)
-
-    return {
-        "accuracy": accuracy,
-        "precision": precision,
-        "recall": recall,
-        "f1": f1,
-    }
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="网络对齐任务训练脚本")
-    parser.add_argument("--data_path", type=str, default="lpformer_data.pt", help="包含节点嵌入/PPR等信息的 torch 文件")
-    parser.add_argument("--train_pairs_path", type=str, default="train_pairs_merged.pt", help="训练锚点对")
-    parser.add_argument("--test_pairs_path", type=str, default="test_pairs_merged.pt", help="测试锚点对")
-    parser.add_argument("--gnid2text_path", type=str, default="gnid2text.json", help="节点文本映射，可选")
-    parser.add_argument("--output_dir", type=str, default="./checkpoints/alignment", help="模型与日志输出目录")
-    parser.add_argument("--epochs", type=int, default=10, help="训练 epoch 数")
-    parser.add_argument("--batch_size", type=int, default=512, help="每设备 batch size")
-    parser.add_argument("--neg_ratio", type=int, default=4, help="每个正样本生成的负样本数量")
-    parser.add_argument("--eval_neg_ratio", type=int, default=None, help="评估阶段负样本比例，默认等于 neg_ratio")
-    parser.add_argument("--learning_rate", type=float, default=1e-3, help="学习率")
-    parser.add_argument("--dropout", type=float, default=0.1, help="MLP dropout 概率")
-    parser.add_argument("--hidden_dim", type=int, default=512, help="MLP 隐藏维度")
-    parser.add_argument("--seed", type=int, default=42, help="随机种子")
-    parser.add_argument("--log_steps", type=int, default=50, help="日志打印步数")
-    return parser.parse_args()
-
-
-def set_all_seeds(seed: int) -> None:
-    torch.manual_seed(seed)
-    np.random.seed(seed)
-    random.seed(seed)
-
-
-def load_node_embeddings(data: Dict[str, torch.Tensor]) -> torch.Tensor:
-    for key in ("x", "node_embeddings", "embeddings"):
-        if key in data:
-            emb = data[key]
-            if not isinstance(emb, torch.Tensor):
-                raise TypeError(f"{key} should be a torch.Tensor, got {type(emb)}")
-            return emb.detach().cpu().float()
-    raise KeyError("无法在数据文件中找到节点嵌入 (x/node_embeddings/embeddings)")
+def load_text_embeddings(folder_path: str, method: str, max_hop: int, device: str):
+    embedding_list = []
+    for hop in range(max_hop + 1):
+        if hop == 0:
+            file_name = f"text_emb_{method}.pt"
+        else:
+            file_name = f"text_emb_{method}_{hop}hop.pt"
+        emb_path = os.path.join(folder_path, file_name)
+        embedding_list.append(torch.load(emb_path, map_location=device))
+    return embedding_list
 
 
 def main() -> None:
-    args = parse_args()
-    set_all_seeds(args.seed)
+    basics.set_seeds(42)
+
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument("--model_name_or_path", required=True)
+    parser.add_argument("--text_embedding_method", required=True)
+    parser.add_argument("--text_embedding_folder_path_A", required=True)
+    parser.add_argument("--text_embedding_folder_path_B", required=True)
+    parser.add_argument("--max_hop", type=int, default=0)
+    parser.add_argument("--dataset_for_lm_path_A", required=True)
+    parser.add_argument("--dataset_for_lm_path_B", required=True)
+    parser.add_argument("--align_dataset_path", required=True)
+    parser.add_argument("--output_dir", required=True)
+    parser.add_argument("--dataset_name", required=True)
+
+    parser.add_argument(
+        "--device_setting",
+        default=None,
+        choices=["cpu", "cuda", "cuda:0", "cuda:1", "cuda:2", "cuda:3"],
+    )
+
+    parser.add_argument("--wandb_key", default=None, type=str)
+    parser.add_argument("--project_name", default="LinkGPT-align", type=str)
+    parser.add_argument("--run_name", default="alignment_run", type=str)
+
+    parser.add_argument("--finetuning_type", default="lora")
+    parser.add_argument("--per_device_train_batch_size", default=4, type=int)
+    parser.add_argument("--gradient_accumulation_steps", default=4, type=int)
+    parser.add_argument("--lr_scheduler_type", default="cosine")
+    parser.add_argument("--logging_steps", default=10, type=int)
+    parser.add_argument("--save_steps", default=10000, type=int)
+    parser.add_argument("--learning_rate", default=5e-5, type=float)
+    parser.add_argument("--weight_decay", default=0, type=float)
+    parser.add_argument("--warmup_ratio", default=0, type=float)
+    parser.add_argument("--max_grad_norm", default=1.0, type=float)
+
+    parser.add_argument("--num_train_epochs_stage1", default=1, type=int)
+    parser.add_argument("--num_train_epochs_stage2", default=1, type=int)
+    parser.add_argument("--fp16", action="store_true")
+    parser.add_argument("--report_to", default=None)
+    parser.add_argument("--dataloader_num_workers", default=4, type=int)
+    parser.add_argument("--dataloader_prefetch_factor", default=8, type=int)
+
+    parser.add_argument("--lora_target", default="q_proj,v_proj")
+    parser.add_argument("--lora_alpha", default=16, type=float)
+    parser.add_argument("--lora_rank", default=8, type=int)
+    parser.add_argument("--lora_dropout", default=0.0, type=float)
+
+    parser.add_argument("--freeze_graph_related_modules_in_stage2", action="store_true")
+    parser.add_argument("--node_proj_num_layers", default=1, type=int)
+
+    args = parser.parse_args()
+    print(vars(args))
+
     os.makedirs(args.output_dir, exist_ok=True)
 
-    data_bundle = torch.load(args.data_path, map_location="cpu")
-    node_embeddings = load_node_embeddings(data_bundle)
-    ppr_train = data_bundle.get("ppr")
-    ppr_test = data_bundle.get("ppr_test", ppr_train)
+    if args.wandb_key:
+        if args.wandb_key == "None":
+            args.report_to = None
+        else:
+            wandb.login(key=args.wandb_key)
+            os.environ["WANDB_PROJECT"] = args.project_name
+            os.environ["WANDB_RUN_NAME"] = args.run_name
 
-    train_pairs = torch.load(args.train_pairs_path, map_location="cpu")
-    test_pairs = torch.load(args.test_pairs_path, map_location="cpu")
-
-    if os.path.exists(args.gnid2text_path):
-        with open(args.gnid2text_path, "r", encoding="utf-8") as f:
-            gnid2text = json.load(f)
-        print(f"📄 成功加载 gnid2text 文本映射，共 {len(gnid2text)} 条")
+    if args.device_setting is None:
+        device = basics.get_device()
+        print(f"No device setting is provided. Using {device}", flush=True)
     else:
-        gnid2text = None
-        print("ℹ️ 未找到 gnid2text 文本映射，训练仅基于结构与嵌入特征")
+        device = args.device_setting
 
-    eval_neg_ratio = args.neg_ratio if args.eval_neg_ratio is None else max(args.eval_neg_ratio, 0)
-
-    train_dataset = AlignmentDataset(
-        node_embeddings=node_embeddings,
-        pairs=train_pairs,
-        ppr=ppr_train,
-        neg_ratio=args.neg_ratio,
-        seed=args.seed,
-        shuffle=True,
+    text_emb_list_A = load_text_embeddings(
+        args.text_embedding_folder_path_A,
+        args.text_embedding_method,
+        args.max_hop,
+        device,
     )
-    eval_dataset = AlignmentDataset(
-        node_embeddings=node_embeddings,
-        pairs=test_pairs,
-        ppr=ppr_test,
-        neg_ratio=eval_neg_ratio,
-        seed=args.seed,
-        shuffle=False,
+    text_emb_list_B = load_text_embeddings(
+        args.text_embedding_folder_path_B,
+        args.text_embedding_method,
+        args.max_hop,
+        device,
     )
 
-    model = AlignmentScoringModel(
-        embed_dim=node_embeddings.shape[1],
-        hidden_dim=args.hidden_dim,
-        dropout=args.dropout,
-        use_ppr=train_dataset.ppr_lookup is not None,
+    dataset_for_lm_A = basics.load_pickle(args.dataset_for_lm_path_A)
+    dataset_for_lm_B = basics.load_pickle(args.dataset_for_lm_path_B)
+
+    gnid2text_A = build_gnid2text(dataset_for_lm_A, "A")
+    gnid2text_B = build_gnid2text(dataset_for_lm_B, "B")
+
+    align_dataset: AlignDataset = basics.load_pickle(args.align_dataset_path)
+    align_dataset.gnid2text_A = gnid2text_A
+    align_dataset.gnid2text_B = gnid2text_B
+    align_dataset.config.node_encoding_max_hop = args.max_hop
+    align_dataset.config.return_tokenized = True
+
+    num_node_types = getattr(align_dataset, "num_node_types", 1)
+    num_relation_types = getattr(align_dataset, "num_relation_types", 1)
+
+    hf_args_dict = {
+        "do_train": True,
+        "stage": "pt",
+        "lora_target": args.lora_target,
+        "overwrite_output_dir": True,
+        "resize_vocab": True,
+        "model_name_or_path": args.model_name_or_path,
+        "output_dir": args.output_dir,
+        "dataset": args.dataset_name,
+        "finetuning_type": args.finetuning_type,
+        "per_device_train_batch_size": args.per_device_train_batch_size,
+        "gradient_accumulation_steps": args.gradient_accumulation_steps,
+        "lr_scheduler_type": args.lr_scheduler_type,
+        "logging_steps": args.logging_steps,
+        "save_steps": args.save_steps,
+        "learning_rate": args.learning_rate,
+        "num_train_epochs": args.num_train_epochs_stage1,
+        "fp16": args.fp16,
+        "lora_rank": args.lora_rank,
+        "lora_dropout": args.lora_dropout,
+        "lora_alpha": args.lora_alpha,
+        "report_to": args.report_to,
+        "dataloader_prefetch_factor": args.dataloader_prefetch_factor,
+        "dataloader_num_workers": args.dataloader_num_workers,
+        "warmup_ratio": args.warmup_ratio,
+        "max_grad_norm": args.max_grad_norm,
+        "weight_decay": args.weight_decay,
+    }
+    model_args, data_args, training_args, finetuning_args, generating_args = get_train_args(
+        hf_args_dict
     )
 
-    training_args = TrainingArguments(
-        output_dir=args.output_dir,
-        num_train_epochs=args.epochs,
-        per_device_train_batch_size=args.batch_size,
-        per_device_eval_batch_size=args.batch_size,
-        learning_rate=args.learning_rate,
-        eval_strategy="epoch",
-        save_strategy="no",
-        logging_steps=args.log_steps,
-        remove_unused_columns=False,
-        report_to=[],
-        seed=args.seed,
+    model, tokenizer = get_model_and_tokenizer(
+        model_args,
+        finetuning_args,
+        node_encoding_list_A=text_emb_list_A,
+        lpformer_model=None,
+        is_trainable=True,
+        device=device,
+        apply_lora=True,
+        node_proj_num_layers=args.node_proj_num_layers,
+        num_node_types=num_node_types,
+        num_relation_types=num_relation_types,
+        node_encoding_list_B=text_emb_list_B,
     )
 
-    trainer = Trainer(
+    align_dataset.tokenizer = tokenizer
+    align_dataset.set_lengths()
+
+    linkgpt_data_collator = LinkGPTDataCollator(tokenizer)
+
+    # Stage 1: train graph-related parameters
+    print("Stage 1: Train graph encoder parameters", flush=True)
+    freeze_all_parameters(model)
+    unfreeze_graph_related_modules(model)
+    trainable_param, total_param = count_parameters(model)
+    print(f"Num of trainable params: {trainable_param}", flush=True)
+    print(f"Total num of params: {total_param}", flush=True)
+    print(f"ratio: {trainable_param / total_param * 100: .3}%", flush=True)
+
+    training_args.num_train_epochs = args.num_train_epochs_stage1
+    stage1_dataset = align_dataset
+    stage1_trainer = Trainer(
         model=model,
         args=training_args,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
-        compute_metrics=compute_metrics,
+        data_collator=linkgpt_data_collator,
+        train_dataset=stage1_dataset,
     )
+    stage1_trainer.train()
+    save_lora_model(stage1_trainer.model, os.path.join(args.output_dir, "stage1"))
 
-    if train_dataset.neg_ratio > 0:
-        trainer.add_callback(NegativeResampleCallback(train_dataset))
+    # Stage 2: jointly tune LLM and graph modules
+    print("Stage 2: Jointly tune the LLM and graph modules", flush=True)
+    freeze_all_parameters(model)
+    if not args.freeze_graph_related_modules_in_stage2:
+        unfreeze_graph_related_modules(model)
+    unfreeze_lora_adapter(model)
+    trainable_param, total_param = count_parameters(model)
+    print(f"Num of trainable params: {trainable_param}")
+    print(f"Total num of params: {total_param}")
+    print(f"ratio: {trainable_param / total_param * 100: .3}%")
 
-    print("🚀 开始训练网络对齐模型...")
-    trainer.train()
-    metrics = trainer.evaluate()
-    print("📊 评估指标:", metrics)
-
-    model_dir = os.path.join(args.output_dir, "alignment_model")
-    os.makedirs(model_dir, exist_ok=True)
-    torch.save(
-        {
-            "model_state_dict": model.state_dict(),
-            "embed_dim": int(node_embeddings.shape[1]),
-            "use_ppr": bool(train_dataset.ppr_lookup is not None),
-        },
-        os.path.join(model_dir, "pytorch_model.bin"),
+    training_args.num_train_epochs = args.num_train_epochs_stage2
+    stage2_trainer = Trainer(
+        model=model,
+        args=training_args,
+        data_collator=linkgpt_data_collator,
+        train_dataset=align_dataset,
     )
-    with open(os.path.join(model_dir, "training_args.json"), "w", encoding="utf-8") as f:
-        json.dump(vars(args), f, ensure_ascii=False, indent=2)
-
-    print(f"✅ 模型与配置已保存在 {model_dir}")
+    stage2_trainer.train()
+    save_lora_model(stage2_trainer.model, os.path.join(args.output_dir, "stage2"))
 
 
 if __name__ == "__main__":
